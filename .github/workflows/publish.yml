@@ -1,9 +1,8 @@
 name: Publish to npm
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -11,40 +10,26 @@ permissions:
 
 jobs:
   publish:
-    name: Publish package
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Setup Node for npm publishing
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org/
+          node-version: 22.14.0
+          registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Typecheck
-        run: bun run typecheck --if-present
-
-      - name: Lint
-        run: bun run lint --if-present
+        run: npm ci
 
       - name: Test
-        run: bun test
+        run: npm test --if-present
 
       - name: Build
-        run: bun run build --if-present
+        run: npm run build --if-present
 
-      - name: Publish to npm
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish
+        run: npm publish --access public

@@ -1,38 +1,9 @@
-# Dependencies
 node_modules/
-
-# Build output
-dist/
-
-# Test output
+dist-test/
 coverage/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-npm-debug.log*
-
-# Temp
-*.tmp
-*.temp
-.tmp/
-
-# Env files with secrets (not tracked by gts anyway)
 .env
-.env.local
-.env.*.local
-
-# Global cheapcode folder (shouldn't be in this version but just in case)
-.cheapcode/
-
-# Test files
-tests/
+.env.*
+*.log
+.DS_Store
+.opencode/state/
+.git-that-shit/
