@@ -26,9 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Text redaction** — YAML/TOML/`.env`-style/`.jsonc`/shell files, `Authorization` headers, and multiline PEM blocks
   are redacted.
 - **Atomic locking** — exclusive-create lock acquisition with stale-lock ownership checks.
-- **Extended test suite** — 278 tests across 19 files, including concurrency, restore behavior, prune, security, CLI,
-  packaging, and the V2 plugin surface.
+- **Extended test suite** — 287 tests across 20 files, including concurrency, restore behavior, prune, security, CLI,
+  packaging, independence/interoperability, and the V2 plugin surface.
 - **Documentation** — `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/INTEROP.md`.
+- **Independence hardening** — hooks are failure-isolated (a snapshot error can never break a tool or another plugin)
+  and read-only with respect to the tool event; verified that OpenCode awaits the async `execute.before` hook before
+  running the tool, so pre-operation snapshots are genuinely blocking. Added the independence/interoperability
+  standard, companion matrix, and Docker Plugin Test Lab compatibility notes.
 
 ### Fixed
 

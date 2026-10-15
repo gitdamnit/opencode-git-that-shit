@@ -121,34 +121,48 @@ export const GitThatShitPlugin = Plugin.define({
       }, debounce);
     };
 
+    // Failure isolation: a snapshot failure, a malformed project file, or a
+    // missing companion plugin must never surface as a tool failure or break
+    // another plugin. Hooks are strictly additive and read-only with respect to
+    // the event: they never mutate `event` or `event.input`.
+    const safe = async (label: string, fn: () => Promise<void>): Promise<void> => {
+      try {
+        await fn();
+      } catch (error) {
+        console.error(`[git-that-shit] ${label} failed: ${(error as Error).message}`);
+      }
+    };
+
     // --- Tool hooks -------------------------------------------------------
     // `execute.before` runs before a tool executes: this is the only correct
     // place for a *pre*-edit / pre-operation snapshot.
     await ctx.tool.hook("execute.before", async (event: any) => {
-      if (event.sessionID) {
-        lastSessionId = String(event.sessionID);
-      }
-
-      const tool = String(event.tool);
-      const cfg = await getConfig();
-
-      if (SHELL_TOOLS.has(tool)) {
-        const args = extractCommandArgs(event.input);
-        const detection = detector.detectDestructiveCommand(tool, args, cfg);
-
-        if (detection.shouldSnapshot) {
-          const snapshotType: SnapshotType =
-            detection.level === "risky" ? "pre-risky-op" : "pre-op";
-          await createSnapshot(snapshotType, detection.reason, "tool.execute.before", undefined, {
-            tool,
-            preview: detection.commandPreview,
-          });
+      await safe("execute.before", async () => {
+        if (event.sessionID) {
+          lastSessionId = String(event.sessionID);
         }
-      }
 
-      if (EDIT_TOOLS.has(tool) && cfg.fileEdits.mode === "pre-if-available") {
-        await createSnapshot("pre-edit", `pre-edit for ${tool}`, "tool.execute.before");
-      }
+        const tool = String(event.tool);
+        const cfg = await getConfig();
+
+        if (SHELL_TOOLS.has(tool)) {
+          const args = extractCommandArgs(event.input);
+          const detection = detector.detectDestructiveCommand(tool, args, cfg);
+
+          if (detection.shouldSnapshot) {
+            const snapshotType: SnapshotType =
+              detection.level === "risky" ? "pre-risky-op" : "pre-op";
+            await createSnapshot(snapshotType, detection.reason, "tool.execute.before", undefined, {
+              tool,
+              preview: detection.commandPreview,
+            });
+          }
+        }
+
+        if (EDIT_TOOLS.has(tool) && cfg.fileEdits.mode === "pre-if-available") {
+          await createSnapshot("pre-edit", `pre-edit for ${tool}`, "tool.execute.before");
+        }
+      });
     });
 
     // `execute.after` runs after a tool completes. This is the reliable V2
@@ -156,18 +170,20 @@ export const GitThatShitPlugin = Plugin.define({
     // only emitted for out-of-band filesystem changes, not for agent tool
     // writes, so relying on it alone would miss post-edit snapshots.
     await ctx.tool.hook("execute.after", async (event: any) => {
-      if (event.status !== "completed") {
-        return;
-      }
-      const tool = String(event.tool);
-      if (!EDIT_TOOLS.has(tool)) {
-        return;
-      }
-      const cfg = await getConfig();
-      if (cfg.fileEdits.mode === "disabled") {
-        return;
-      }
-      await createSnapshot("post-edit", `post-edit for ${tool}`, "tool.execute.after");
+      await safe("execute.after", async () => {
+        if (event.status !== "completed") {
+          return;
+        }
+        const tool = String(event.tool);
+        if (!EDIT_TOOLS.has(tool)) {
+          return;
+        }
+        const cfg = await getConfig();
+        if (cfg.fileEdits.mode === "disabled") {
+          return;
+        }
+        await createSnapshot("post-edit", `post-edit for ${tool}`, "tool.execute.after");
+      });
     });
 
     // --- Event subscriptions ---------------------------------------------
@@ -180,33 +196,37 @@ export const GitThatShitPlugin = Plugin.define({
         for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
           const data = ((event as any).data ?? {}) as Record<string, unknown>;
 
-          switch (event.type) {
-            case "session.created":
-              if (data.sessionID) lastSessionId = String(data.sessionID);
-              await createSnapshot("session-start", "session created", "session.created");
-              break;
+          // Each event is handled in isolation so one malformed event cannot
+          // tear down the subscription.
+          await safe(`event ${event.type}`, async () => {
+            switch (event.type) {
+              case "session.created":
+                if (data.sessionID) lastSessionId = String(data.sessionID);
+                await createSnapshot("session-start", "session created", "session.created");
+                break;
 
-            case "session.compaction.ended":
-            case "session.compacted" as never:
-              await createSnapshot(
-                "post-compact",
-                "context window compacted",
-                "session.compaction.ended"
-              );
-              break;
+              case "session.compaction.ended":
+              case "session.compacted" as never:
+                await createSnapshot(
+                  "post-compact",
+                  "context window compacted",
+                  "session.compaction.ended"
+                );
+                break;
 
-            case "filesystem.changed":
-            case "file.edited" as never: {
-              const file = typeof data.file === "string" ? data.file : "";
-              if (file) {
-                await schedulePostEdit(file);
+              case "filesystem.changed":
+              case "file.edited" as never: {
+                const file = typeof data.file === "string" ? data.file : "";
+                if (file) {
+                  await schedulePostEdit(file);
+                }
+                break;
               }
-              break;
-            }
 
-            default:
-              break;
-          }
+              default:
+                break;
+            }
+          });
         }
       } catch (error) {
         if (!controller.signal.aborted) {

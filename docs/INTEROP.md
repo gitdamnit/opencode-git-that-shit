@@ -1,62 +1,117 @@
 # Interoperability
 
 Git That Shit is developed concurrently with other OpenCode plugins. It is intentionally self-contained: it does not
-import, call, or depend on their code, storage, or APIs.
+import, call, or depend on their code, storage, APIs, or initialization order. Interoperability is an optional
+enhancement, never a requirement.
 
 ## Compatibility matrix
 
 | Component | Version targeted | Notes |
 | --- | --- | --- |
-| OpenCode | 2.0.x | Plugin uses the V2 API; live discovery verified against 2.0.21 |
-| `@opencode/plugin` | 2.0.21 (pinned) | Pinned to the host release the plugin targets |
+| OpenCode | 2.0.x | Plugin uses the V2 API; runtime behavior verified against 2.0.21 |
+| `@opencode/plugin` | 2.0.21 (pinned) | Only runtime dependency; matches the host release targeted |
 | Node.js | >= 18 | ESM package |
 | git | any recent | Shadow repository operations |
 
-## Checkpoint Orchestrator
+## Independence standard
+
+Git That Shit conforms to the shared independence standard for toolkit plugins:
+
+- Works installed alone, alongside either companion, or alongside both.
+- Independent versioning and release cycle.
+- Never requires another plugin for startup or normal operation.
+- Never imports another plugin's internal modules; never uses `@gitdamnit/*` imports.
+- Never depends on another plugin's storage or private details.
+- Never assumes installation or initialization order.
+- No global mutable state shared with other plugins.
+- Namespaced configuration (`.git-that-shit/git-that-shit/config.json`), storage
+  (`.git-that-shit/git-that-shit/snapshots/`), and logging (`[git-that-shit]`).
+- Preserves its standalone `gts` CLI, which needs no OpenCode or companion plugin.
+
+### Hook independence
+
+- Git That Shit registers `ctx.tool.hook("execute.before")`, `ctx.tool.hook("execute.after")`, and a
+  `ctx.event.subscribe()` subscription.
+- Correctness does **not** depend on another plugin running first. It never reads another plugin's output and never
+  assumes tool arguments were modified by another plugin.
+- Its hooks are **read-only** with respect to the tool event; they never mutate `event` or `event.input`.
+- OpenCode awaits the async `execute.before` hook before running the tool (verified against 2.0.21), so the
+  pre-operation snapshot completes before the risky operation. There is no claimed protection that is not provided.
+
+## Companion behavior
+
+| Companion state | Git That Shit behavior |
+| --- | --- |
+| Stranger Danger absent/disabled | Fully functional; redacts secrets independently |
+| Checkpoint Orchestrator absent/disabled | Fully functional; snapshot history independent |
+| Companion data malformed | Non-fatal; malformed files fail closed or are skipped |
+| Companion initialization failed | No effect; Git That Shit does not await or require it |
+| Missing optional interface | Graceful; the interface is never required |
+
+## Specific companions
+
+### Checkpoint Orchestrator
 
 Checkpoint Orchestrator is migrating its persistence to SQLite. Its schema, database location, export interface, and
-APIs are **not finalised**, so Git That Shit does not integrate with its database directly.
+APIs are **not finalised**, so Git That Shit does not integrate with its database directly and ships no speculative
+integration code.
 
-- Git That Shit never copies a live SQLite database. `*.sqlite`, `*.sqlite3`, `*.db`, `*.db-wal`, and `*.db-shm` are
-  hard-excluded, because copying a database while it is being written can capture a torn, unusable file.
-- Git That Shit continues to snapshot stable, human-readable handoff files that Checkpoint Orchestrator produces
-  (for example `.opencode/state/checkpoint.json`, `.opencode/state/handoff.md`, and
-  `.opencode/state/checkpoint-history.json`). These remain useful recovery points.
+- It **never** copies a live SQLite database. `*.sqlite`, `*.sqlite3`, `*.db`, `*.db-wal`, and `*.db-shm` are
+  hard-excluded, because copying a database mid-write can capture a torn, unusable file.
+- It may back up stable, human-readable handoff files that Checkpoint Orchestrator produces
+  (`.opencode/state/checkpoint.json`, `.opencode/state/handoff.md`, `.opencode/state/checkpoint-history.json`) as
+  ordinary **project files** — never by writing into Checkpoint Orchestrator's storage.
+- These files are optional: if they are absent or malformed, Git That Shit still works.
 
-### Future integration strategy
+**Future integration strategy (documented, not implemented):** when Checkpoint Orchestrator finalises an export
+interface, prefer its supported backup/export command to produce a consistent point-in-time copy (for example
+`VACUUM INTO`, `.backup`, or a JSON/NDJSON export) into a stable file, then add that file or directory to
+`tracking.include`. Do not enable raw `.db` tracking. Until then, no coupling exists.
 
-When Checkpoint Orchestrator finalises an export/backup interface:
+### Stranger Danger
 
-1. Prefer its supported **backup or export** command to produce a consistent, point-in-time copy (for example
-   `VACUUM INTO`, `.backup`, or a JSON/NDJSON export) into a stable file.
-2. Add that exported file (or its directory) to `tracking.include`.
-3. Do not enable raw `.db` tracking.
+Stranger Danger performs security inspection independently. Git That Shit assumes nothing about it:
 
-Until then, no coupling exists and no assumptions are made about its schema or paths.
+- Git That Shit redacts secrets in its own pipeline before storing anything, so snapshots are safe whether or not
+  Stranger Danger is installed, and regardless of hook order.
+- Git That Shit never mutates tool input, so it cannot interfere with Stranger Danger's inspection.
+- If both plugins register `execute.before`, each is independently correct. Git That Shit does not depend on, and does
+  not claim, a specific ordering.
 
-## Stranger Danger
+### Other plugins and agents
 
-Stranger Danger performs secret sanitization independently. Git That Shit **does not assume** Stranger Danger's hooks
-run before its own, and it does not rely on them for safety:
+Git That Shit only reads project config/state files and writes its own shadow repository. It does not modify another
+plugin's storage, other projects, global configuration, or the OpenCode service.
 
-- Git That Shit redacts secrets in its own pipeline before storing anything.
-- Git That Shit never mutates tool input, so it cannot interfere with Stranger Danger's transformations.
-- If both plugins register `execute.before` hooks, OpenCode runs them in registration order; later hooks observe changes
-  made by earlier hooks. Because Git That Shit only reads, ordering does not affect correctness.
+## Optional interoperability (implemented)
 
-Potential concern to document for integration: if Stranger Danger rewrites a command or argument *after* Git That Shit
-has snapshotted, the snapshot reflects the pre-rewrite state. This is acceptable because Git That Shit snapshots the
-**filesystem**, not the command, and its own redaction still applies to file contents.
+The single implemented cross-plugin interaction is **read-only observation of well-known, human-readable project state
+files** for backup purposes. This is a path-based interface with no imports, no shared database, and no shared mutable
+state:
 
-## TRAVIS D3
+- `.opencode/state/checkpoint.json`
+- `.opencode/state/handoff.md`
+- `.opencode/state/checkpoint-history.json`
+- `.opencode/state/strangerdanger-audit.jsonl`
 
-TRAVIS D3 is an unrelated application. Git That Shit does not read, modify, or depend on its source, dependencies,
-containers, database, or deployment.
+Absence is normal and non-fatal. Malformed content fails closed (a config JSON that cannot be parsed is skipped rather
+than stored). No plugin is required to produce these files.
 
-## Cross-plugin development notes
+## Docker Plugin Test Lab
 
-- Do not install development versions of Git That Shit into the shared live plugin directory; load it from an isolated
-  location or the packed tarball during testing.
-- Do not restart or reconfigure the shared OpenCode service for Git That Shit testing. Use an isolated
-  `XDG_CONFIG_HOME`/`XDG_DATA_HOME` and a private `opencode serve` instance instead.
+The external test lab can validate this plugin without any in-plugin integration framework:
+
+- Isolated OpenCode V2 runtime (`opencode run --standalone` / `opencode serve`) with independent XDG directories.
+- Disposable project directory and a local mock model provider.
+- Reproducible install from the packed tarball (`npm pack` → install).
+- Automated assertions on tool registration, hook execution, and snapshots.
+- Concurrent session tests (the project-scoped lock serializes writes).
+- Installation combinations from the companion matrix.
+
+The test lab owns its code; this repository does not.
+
+## Development constraints
+
+- Do not install development versions into the shared live plugin directory; use an isolated location or tarball.
+- Do not restart or reconfigure the shared OpenCode service for testing; use isolated XDG dirs and a private server.
 - Do not depend on unfinished APIs, paths, or storage formats from other plugins.
