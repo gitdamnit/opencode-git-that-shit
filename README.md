@@ -1,8 +1,10 @@
-# OpenCode Git That Shit
-
 ![Git That Shit logo](./gitthatshit.jpeg)
 
+# @gitdamnit/opencode-git-that-shit
+
+
 > "Oh Shit Git" is what you say after the disaster. Git That Shit is what the tool does *before* the disaster.
+
 
 Automatic pre-disaster snapshots for OpenCode AI coding agent config and state files.
 
