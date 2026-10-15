@@ -131,14 +131,15 @@ describe("Redactor", () => {
     expect(result.redacted).toBe(false);
   });
 
-  it("shouldRedact returns true for JSON", async () => {
+  it("shouldRedact returns true for JSON and text configs", async () => {
     const { createRedactor } = await import(MODULE);
     const { createTracker } = await import("../src/engine/tracker.js");
     const { DEFAULT_CONFIG } = await import("../src/engine/config.js");
     const redactor = createRedactor(createTracker(DEFAULT_CONFIG));
     expect(redactor.shouldRedact("config.json")).toBe(true);
-    expect(redactor.shouldRedact("file.txt")).toBe(false);
-    expect(redactor.shouldRedact("file.yaml")).toBe(false);
+    expect(redactor.shouldRedact("file.txt")).toBe(true);
+    expect(redactor.shouldRedact("file.yaml")).toBe(true);
+    expect(redactor.shouldRedact("image.png")).toBe(false);
   });
 
   it("redactString finds key patterns", async () => {

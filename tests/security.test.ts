@@ -13,7 +13,7 @@ describe("security hardening", () => {
     if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
   });
 
-  // Path traversal via tracker
+  // Path traversal via tracker is rejected.
   it("tracker blocks parent dir traversal in path", async () => {
     const { createTracker } = await import("../src/engine/tracker.js");
     const config = {
@@ -27,7 +27,8 @@ describe("security hardening", () => {
     };
     const tracker = createTracker(config);
     const result = tracker.shouldTrack("../../../etc/passwd.json");
-    expect(result.track).toBe(true);
+    expect(result.track).toBe(false);
+    expect(result.reason).toContain("unsafe");
   });
 
   // Tracker hard-excludes actual dangerous paths
@@ -93,8 +94,8 @@ describe("security hardening", () => {
     expect(tracker.isSensitive("private.key")).toBe(true);
   });
 
-  // Redactor won't leak secrets through non-JSON files
-  it("redactor only processes JSON files for deep redaction", async () => {
+  // Redactor now redacts secrets in textual (non-JSON) config too.
+  it("redactor redacts secrets in YAML/text files", async () => {
     const { createRedactor } = await import("../src/engine/redactor.js");
     const { createTracker } = await import("../src/engine/tracker.js");
     const config = {
@@ -111,8 +112,10 @@ describe("security hardening", () => {
     const f = path.join(testDir, "config.yaml");
     writeFileSync(f, "apiKey: sk-1234\ntoken: secret");
     const result = await redactor.redactFile(f);
-    expect(result.redacted).toBe(false);
-    expect(result.content).toContain("sk-1234");
+    expect(result.redacted).toBe(true);
+    expect(result.content).not.toContain("sk-1234");
+    expect(result.content).not.toContain("secret");
+    expect(result.content).toContain("[REDACTED]");
   });
 
   // Snapshot handles large files gracefully

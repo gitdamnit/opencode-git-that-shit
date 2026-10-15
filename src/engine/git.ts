@@ -13,14 +13,16 @@ async function spawnGit(
     cwd?: string;
     timeout?: number;
     captureStderr?: boolean;
+    env?: Record<string, string>;
   } = {}
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const { cwd = process.cwd(), timeout = DEFAULT_TIMEOUT, captureStderr = true } = options;
+  const { cwd = process.cwd(), timeout = DEFAULT_TIMEOUT, captureStderr = true, env } = options;
 
   return new Promise((resolve) => {
     const proc = spawn("git", args, {
       cwd,
       stdio: captureStderr ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "ignore"],
+      env: env ? { ...process.env, ...env } : process.env,
     });
 
     let stdout = "";
@@ -276,4 +278,108 @@ export async function getTrackingFiles(repoPath: string): Promise<string[]> {
     return [];
   }
   return result.stdout.split("\n").filter((f) => f);
+}
+
+/** All commit hashes, oldest first. */
+export async function revListReverse(repoPath: string): Promise<string[]> {
+  const result = await spawnGit(["rev-list", "--reverse", "HEAD"], { cwd: repoPath });
+  if (result.exitCode !== 0) {
+    return [];
+  }
+  return result.stdout.split("\n").filter((f) => f);
+}
+
+export interface CommitMeta {
+  tree: string;
+  message: string;
+  authorName: string;
+  authorEmail: string;
+  authorDate: string;
+  committerName: string;
+  committerEmail: string;
+  committerDate: string;
+}
+
+export async function getCommitMeta(repoPath: string, hash: string): Promise<CommitMeta | null> {
+  const format = "%T%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%B";
+  const result = await spawnGit(["show", "-s", `--format=${format}`, hash], { cwd: repoPath });
+  if (result.exitCode !== 0) {
+    return null;
+  }
+  const parts = result.stdout.split("\u0000");
+  if (parts.length < 8) {
+    return null;
+  }
+  return {
+    tree: parts[0].trim(),
+    authorName: parts[1],
+    authorEmail: parts[2],
+    authorDate: parts[3],
+    committerName: parts[4],
+    committerEmail: parts[5],
+    committerDate: parts[6],
+    message: parts.slice(7).join("\u0000").trim(),
+  };
+}
+
+export async function commitTree(
+  repoPath: string,
+  tree: string,
+  parent: string | null,
+  meta: CommitMeta
+): Promise<string> {
+  const args = ["commit-tree", tree];
+  if (parent) {
+    args.push("-p", parent);
+  }
+  args.push("-m", meta.message);
+
+  const result = await spawnGit(args, {
+    cwd: repoPath,
+    env: {
+      GIT_AUTHOR_NAME: meta.authorName,
+      GIT_AUTHOR_EMAIL: meta.authorEmail,
+      GIT_AUTHOR_DATE: meta.authorDate,
+      GIT_COMMITTER_NAME: meta.committerName,
+      GIT_COMMITTER_EMAIL: meta.committerEmail,
+      GIT_COMMITTER_DATE: meta.committerDate,
+    },
+  });
+
+  if (result.exitCode !== 0) {
+    throw new GitOperationError(`Failed to create commit: ${result.stderr}`, "git commit-tree", result.exitCode);
+  }
+  return result.stdout.trim();
+}
+
+/** Move `refPath` from `expectedOld` to `newHash` atomically (compare-and-swap). */
+export async function updateRef(
+  repoPath: string,
+  refPath: string,
+  newHash: string,
+  expectedOld?: string
+): Promise<boolean> {
+  const args = ["update-ref", refPath, newHash];
+  if (expectedOld) {
+    args.push(expectedOld);
+  }
+  const result = await spawnGit(args, { cwd: repoPath });
+  return result.exitCode === 0;
+}
+
+export async function resetHard(repoPath: string, hash: string): Promise<void> {
+  const result = await spawnGit(["reset", "--hard", hash], { cwd: repoPath });
+  if (result.exitCode !== 0) {
+    throw new GitOperationError(`Failed to reset: ${result.stderr}`, "git reset --hard", result.exitCode);
+  }
+}
+
+/** The branch HEAD currently points at, or "master" on an unborn branch. */
+export async function getHeadRef(repoPath: string): Promise<string> {
+  const result = await spawnGit(["symbolic-ref", "--short", "HEAD"], { cwd: repoPath });
+  if (result.exitCode === 0 && result.stdout) {
+    return result.stdout;
+  }
+  const branch = await getCurrentBranch(repoPath);
+  return branch || "master";
 }

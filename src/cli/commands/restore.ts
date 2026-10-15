@@ -5,7 +5,9 @@ export default async function restoreCommand(args: string[]): Promise<void> {
   const projectRoot = resolveProjectRoot();
 
   if (args.length === 0) {
-    console.error("Usage: gts restore <hash> [--dry-run] [--yes] [--overwrite] [--to-temp]");
+    console.error(
+      "Usage: gts restore <hash> [--dry-run] [--yes] [--overwrite] [--force] [--to-temp]"
+    );
     process.exit(1);
   }
 
@@ -16,7 +18,8 @@ export default async function restoreCommand(args: string[]): Promise<void> {
       ? "overwrite"
       : "dry-run";
 
-  const force = args.includes("--force");
+  // --overwrite and --force both mean "overwrite conflicting files".
+  const force = args.includes("--force") || args.includes("--overwrite");
 
   const targetHash = await restore.getRestoreTarget(projectRoot, hash);
 
@@ -51,14 +54,25 @@ export default async function restoreCommand(args: string[]): Promise<void> {
     }
 
     if (result.missing.length > 0) {
-      console.log("\nMissing from project (will be skipped):");
+      console.log("\nMissing from project (will be created):");
       for (const file of result.missing) {
         console.log(`  ${file}`);
       }
     }
 
+    if (result.conflicts.length > 0) {
+      console.log("\nConflicting files (changed since snapshot):");
+      for (const file of result.conflicts) {
+        console.log(`  ${file}`);
+      }
+      console.log("\nConflicts are only overwritten with --force/--overwrite.");
+    }
+
     console.log("\nTo perform restore, use: gts restore <hash> --yes");
-  } else if (mode === "to-temp") {
+    return;
+  }
+
+  if (mode === "to-temp") {
     console.log("=== Restore to temp mode ===\n");
 
     if (result.tempDir) {
@@ -68,34 +82,34 @@ export default async function restoreCommand(args: string[]): Promise<void> {
     if (result.restored.length === 0) {
       console.log("No files were restored.");
     }
-  } else {
-    console.log("=== Restore mode ===\n");
+    return;
+  }
 
-    console.log(`Restored ${result.restored.length} files`);
+  console.log("=== Restore mode ===\n");
+  console.log(`Restored ${result.restored.length} file(s)`);
 
-    if (result.created.length > 0) {
-      console.log("\nCreated new files:");
-      for (const file of result.created) {
-        console.log(`  ${file}`);
-      }
+  if (result.created.length > 0) {
+    console.log("\nCreated new files:");
+    for (const file of result.created) {
+      console.log(`  ${file}`);
     }
+  }
 
-    if (result.overwritten.length > 0) {
-      console.log("\nOverwritten files:");
-      for (const file of result.overwritten) {
-        console.log(`  ${file}`);
-      }
+  if (result.overwritten.length > 0) {
+    console.log("\nOverwritten files:");
+    for (const file of result.overwritten) {
+      console.log(`  ${file}`);
     }
+  }
 
-    if (result.conflicts.length > 0) {
-      console.log("\nFiles with conflicts:");
-      for (const file of result.conflicts) {
-        console.log(`  ${file}`);
-      }
+  if (result.conflicts.length > 0) {
+    console.log("\nConflicting files (need --force to overwrite):");
+    for (const file of result.conflicts) {
+      console.log(`  ${file}`);
     }
+  }
 
-    if (result.preRestoreHash) {
-      console.log(`\nPre-restore snapshot: ${result.preRestoreHash.slice(0, 7)}`);
-    }
+  if (result.preRestoreHash) {
+    console.log(`\nPre-restore snapshot: ${result.preRestoreHash.slice(0, 7)}`);
   }
 }

@@ -1,29 +1,42 @@
 {
   "name": "@gitdamnit/opencode-git-that-shit",
-  "version": "0.2.0",
-  "description": "automatic pre-disaster snapshots for OpenCode AI coding agent config and state files",
+  "version": "0.3.0",
+  "description": "Automatic pre-disaster snapshots for OpenCode AI coding agent config and state files.",
   "license": "Apache-2.0",
+  "type": "module",
   "main": "./dist/index.js",
-  "files": [
-    "dist/"
-  ],
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./cli": {
+      "import": "./dist/cli/index.js"
+    }
+  },
   "bin": {
     "gts": "./dist/cli/index.js"
   },
+  "files": [
+    "dist/"
+  ],
   "scripts": {
-    "build": "tsc",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc",
     "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
     "test": "bun test",
-    "test:watch": "bun test --watch"
+    "pretest": "npm run build",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "^1.14.48",
-    "minimist": "^1.2.8"
+    "@opencode/plugin": "2.0.21"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
-    "typescript": "^5.3.3",
-    "vitest": "^1.0.0"
+    "typescript": "^5.3.3"
   },
   "engines": {
     "node": ">=18.0.0"

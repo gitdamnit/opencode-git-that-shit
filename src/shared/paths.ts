@@ -7,8 +7,9 @@ export function resolveProjectRoot(cwd?: string): string {
 
   const markers = [
     "opencode.json",
+    "opencode.jsonc",
     "package.json",
-".git-that-shit",
+    ".git-that-shit",
     ".git",
   ];
 
@@ -30,12 +31,34 @@ export function resolveProjectRoot(cwd?: string): string {
   return searchDir;
 }
 
+/**
+ * Canonical Git That Shit layout (v0.3.0+):
+ *
+ *   .git-that-shit/git-that-shit/snapshots/        shadow git repository
+ *   .git-that-shit/git-that-shit/config.json       configuration
+ *   .git-that-shit/git-that-shit/snapshots/.git-that-shit/manifest.jsonl
+ *
+ * The nested `git-that-shit/git-that-shit` path is historical but is the layout
+ * every existing snapshot repository on disk already uses, so it remains
+ * canonical. It is never changed to avoid orphaning existing snapshots.
+ */
+
+/** Directory that holds all Git That Shit state for a project. */
+export function getProjectStateDir(projectRoot: string): string {
+  return path.join(projectRoot, ".git-that-shit", "git-that-shit");
+}
+
 export function getShadowRepoPath(projectRoot: string): string {
-  return path.join(projectRoot, ".git-that-shit", "git-that-shit", "snapshots");
+  return path.join(getProjectStateDir(projectRoot), "snapshots");
+}
+
+/** Legacy shadow-repo location documented by older builds. */
+export function getLegacyShadowRepoPath(projectRoot: string): string {
+  return path.join(projectRoot, ".git-that-shit", "snapshots");
 }
 
 export function getConfigPath(projectRoot: string): string {
-  return path.join(projectRoot, ".git-that-shit", "git-that-shit", "config.json");
+  return path.join(getProjectStateDir(projectRoot), "config.json");
 }
 
 export function getLockPath(projectRoot: string): string {
@@ -46,14 +69,35 @@ export function getManifestPath(projectRoot: string): string {
   return path.join(getShadowRepoPath(projectRoot), ".git-that-shit", "manifest.jsonl");
 }
 
+export function getGlobalConfigDir(): string {
+  const override = process.env.GIT_THAT_SHIT_GLOBAL_CONFIG_DIR;
+  if (override) {
+    return override;
+  }
+  const xdg = process.env.XDG_CONFIG_HOME;
+  if (xdg) {
+    return path.join(xdg, "opencode");
+  }
+  return path.join(os.homedir(), ".config", "opencode");
+}
+
+export function getGlobalConfigPaths(): string[] {
+  const configDir = getGlobalConfigDir();
+  return [
+    path.join(configDir, "config.json"),
+    path.join(configDir, "opencode.json"),
+    path.join(configDir, "opencode.jsonc"),
+  ];
+}
+
 export function getGlobalConfigPath(): string {
-  const homedir = os.homedir();
-  return path.join(homedir, ".config", "opencode", "config.json");
+  return getGlobalConfigPaths()[0];
 }
 
 export function getProjectConfigPaths(projectRoot: string): string[] {
   return [
     path.join(projectRoot, "opencode.json"),
+    path.join(projectRoot, "opencode.jsonc"),
     path.join(projectRoot, ".git-that-shit", "config.json"),
     path.join(projectRoot, ".opencode", "state", "checkpoint.json"),
     path.join(projectRoot, ".opencode", "state", "handoff.md"),

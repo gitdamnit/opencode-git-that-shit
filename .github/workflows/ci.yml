@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - master
+      - "feat/**"
   pull_request:
     branches:
       - main
@@ -12,12 +13,17 @@ on:
 
 jobs:
   test:
-    name: Test and Build
+    name: Typecheck, build and test
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -25,16 +31,19 @@ jobs:
           bun-version: latest
 
       - name: Install dependencies
-        run: bun install
+        run: npm ci
 
       - name: Typecheck
-        run: bun run typecheck --if-present
+        run: npm run typecheck
 
       - name: Lint
-        run: bun run lint --if-present
-
-      - name: Test
-        run: bun test
+        run: npm run lint
 
       - name: Build
-        run: bun run build --if-present
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: CLI smoke test
+        run: node dist/cli/index.js version

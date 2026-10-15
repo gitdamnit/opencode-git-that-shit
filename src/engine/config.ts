@@ -9,6 +9,7 @@ export const DEFAULT_CONFIG: GitThatShitConfig = {
   tracking: {
     include: [
       "opencode.json",
+      "opencode.jsonc",
       ".opencode/state/checkpoint.json",
       ".opencode/state/handoff.md",
       ".opencode/state/checkpoint-history.json",
@@ -170,7 +171,10 @@ export function getHardExcludes(): string[] {
     "*.gguf",
     "*.bin",
     "*.sqlite",
+    "*.sqlite3",
     "*.db",
+    "*.db-wal",
+    "*.db-shm",
     ".env",
     "*.pem",
     "*.key",

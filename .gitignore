@@ -1,8 +1,13 @@
 node_modules/
+dist/
 dist-test/
 coverage/
+*.tsbuildinfo
 .env
 .env.*
+!.env.example
+!.env.sample
+!.env.template
 *.log
 .DS_Store
 .opencode/state/

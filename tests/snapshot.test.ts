@@ -3,6 +3,9 @@ import * as path from "path";
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "fs";
 import { spawnSync } from "child_process";
 
+// Keep snapshot tests hermetic: do not read the developer's real global config.
+process.env.GIT_THAT_SHIT_GLOBAL_CONFIG_DIR = path.join("/tmp", "gts-no-global-" + Date.now());
+
 describe("snapshot lifecycle", () => {
   const testDir = path.join("/tmp", "gts-snap-" + Date.now());
 
