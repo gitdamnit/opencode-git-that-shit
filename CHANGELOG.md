@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Text redaction** — YAML/TOML/`.env`-style/`.jsonc`/shell files, `Authorization` headers, and multiline PEM blocks
   are redacted.
 - **Atomic locking** — exclusive-create lock acquisition with stale-lock ownership checks.
-- **Extended test suite** — 274 tests across 19 files, including concurrency, restore behavior, prune, security, CLI,
+- **Extended test suite** — 278 tests across 19 files, including concurrency, restore behavior, prune, security, CLI,
   packaging, and the V2 plugin surface.
 - **Documentation** — `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/INTEROP.md`.
 
@@ -49,6 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Restore conflict handling** — conflicting files are reported and skipped unless `--force`/`--overwrite` is used;
   restore no longer silently overwrites user changes.
 - **Pre-restore snapshot blocking** — a `no-changes` pre-restore snapshot no longer aborts a restore.
+- **Redacted files are never restored** — restore previously would have written `[REDACTED]` placeholders over live
+  config files, destroying real secrets. Redacted files are now skipped and reported.
+- **Post-edit hook** — verified against OpenCode 2.0.21 that `filesystem.changed` does not fire for agent tool writes;
+  post-edit snapshots are now driven by `ctx.tool.hook("execute.after")`, with `filesystem.changed` as a fallback for
+  out-of-band changes.
 - **CLI snapshot exit code** — `gts snapshot` exits `0` on "no-changes" instead of `1`.
 - **CI** — workflows now install with `npm ci`, run typecheck/lint/build before tests, and require Bun for `bun test`.
 

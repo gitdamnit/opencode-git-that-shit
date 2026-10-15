@@ -68,8 +68,9 @@ Because the whole flow is under one lock, concurrent sessions serialize and cann
 1. If enabled and not forced, take a `pre-restore` snapshot. A `no-changes` result is fine (the latest snapshot is
    already the recovery point); any other failure aborts.
 2. Acquire the project lock and run the restore **once**.
-3. Per file: skip global/shadow-internal files; create missing files; leave unchanged files; report conflicts and only
-   overwrite them when `force` is set.
+3. Per file: skip global/shadow-internal files; **skip redacted files** (their stored content contains `[REDACTED]`
+   placeholders, so restoring them would destroy live secrets); create missing files; leave unchanged files; report
+   conflicts and only overwrite them when `force` is set.
 
 ## Prune flow
 
@@ -98,6 +99,9 @@ OpenCode sessions can audit who created what without fragmenting storage.
 `setup(ctx)`:
 
 - registers an `execute.before` tool hook that detects destructive commands and pre-edits,
-- subscribes to the server event stream for `session.created`, `session.compaction.ended`, and `filesystem.changed`,
+- registers an `execute.after` tool hook that takes post-edit snapshots when an edit tool completes successfully
+  (the reliable V2 signal; `filesystem.changed` does not fire for agent tool writes),
+- subscribes to the server event stream for `session.created`, `session.compaction.ended`, and
+  `filesystem.changed` (out-of-band changes),
 - registers the eight tools via a single synchronous `ctx.tool.transform`,
 - returns a cleanup function that aborts the subscription and clears the edit debounce timer.

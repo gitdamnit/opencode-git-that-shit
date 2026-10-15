@@ -151,6 +151,25 @@ export const GitThatShitPlugin = Plugin.define({
       }
     });
 
+    // `execute.after` runs after a tool completes. This is the reliable V2
+    // signal for a completed edit: the public `filesystem.changed` event is
+    // only emitted for out-of-band filesystem changes, not for agent tool
+    // writes, so relying on it alone would miss post-edit snapshots.
+    await ctx.tool.hook("execute.after", async (event: any) => {
+      if (event.status !== "completed") {
+        return;
+      }
+      const tool = String(event.tool);
+      if (!EDIT_TOOLS.has(tool)) {
+        return;
+      }
+      const cfg = await getConfig();
+      if (cfg.fileEdits.mode === "disabled") {
+        return;
+      }
+      await createSnapshot("post-edit", `post-edit for ${tool}`, "tool.execute.after");
+    });
+
     // --- Event subscriptions ---------------------------------------------
     // V1 hooks -> V2 events:
     //   session.created        -> session.created

@@ -194,7 +194,7 @@ describe("OpenCode V2 plugin", () => {
     }
   });
 
-  it("registers an execute.before tool hook", async () => {
+  it("registers execute.before and execute.after tool hooks", async () => {
     const mod = await import(DIST_INDEX);
     const project = makeProject("hook-reg");
     const { ctx, hooks } = makeHarness(project);
@@ -202,6 +202,52 @@ describe("OpenCode V2 plugin", () => {
     const cleanup = await mod.default.setup(ctx);
     try {
       expect(hooks.has("execute.before")).toBe(true);
+      expect(hooks.has("execute.after")).toBe(true);
+    } finally {
+      await cleanup?.();
+    }
+  });
+
+  it("records a post-edit snapshot from execute.after", async () => {
+    const mod = await import(DIST_INDEX);
+    const project = makeProject("postedit");
+    const { ctx, hooks } = makeHarness(project);
+    const { readManifest } = await import("../src/engine/manifest.js");
+
+    const cleanup = await mod.default.setup(ctx);
+    try {
+      const after = hooks.get("execute.after")!;
+      await after({
+        tool: "write",
+        status: "completed",
+        input: { path: "opencode.json" },
+        sessionID: "s1",
+      });
+
+      const entries = await readManifest(project);
+      expect(entries.length).toBeGreaterThanOrEqual(1);
+      expect(entries[entries.length - 1].type).toBe("post-edit");
+    } finally {
+      await cleanup?.();
+    }
+  });
+
+  it("does not snapshot after a failed edit tool", async () => {
+    const mod = await import(DIST_INDEX);
+    const project = makeProject("postedit-fail");
+    const { ctx, hooks } = makeHarness(project);
+    const { readManifest } = await import("../src/engine/manifest.js");
+
+    const cleanup = await mod.default.setup(ctx);
+    try {
+      await hooks.get("execute.after")!({
+        tool: "write",
+        status: "error",
+        input: { path: "opencode.json" },
+        sessionID: "s1",
+      });
+      const entries = await readManifest(project);
+      expect(entries.length).toBe(0);
     } finally {
       await cleanup?.();
     }

@@ -71,6 +71,7 @@ export interface RestoreResult {
   skipped: Array<{ path: string; reason: string }>;
   missing: string[];
   conflicts: string[];
+  redacted: string[];
   tempDir?: string;
   error?: string;
 }

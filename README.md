@@ -119,13 +119,18 @@ stores config/state snapshots.
 | Destructive git command | `ctx.tool.hook("execute.before")` | `pre-op` |
 | Risky package-manager op | `ctx.tool.hook("execute.before")` | `pre-risky-op` |
 | Config/file edit | `ctx.tool.hook("execute.before")` | `pre-edit` |
-| File changed on disk | `ctx.event.subscribe("filesystem.changed")` | `post-edit` |
+| Edit tool completed | `ctx.tool.hook("execute.after")` | `post-edit` |
+| File changed out of band | `ctx.event.subscribe("filesystem.changed")` | `post-edit` (debounced) |
 | New session | `ctx.event.subscribe("session.created")` | `session-start` |
 | Context compaction | `ctx.event.subscribe("session.compaction.ended")` | `post-compact` |
 | Manual / restore | CLI or `gts_snapshot` / restore | `manual`, `pre-restore` |
 
 Pre-edit snapshots are taken **before** the edit runs (`execute.before`); post-edit snapshots are taken **after** the
-file changes (`filesystem.changed`). A snapshot is never labelled `pre-edit` when it was actually taken after the edit.
+edit completes (`execute.after`). A snapshot is never labelled `pre-edit` when it was actually taken after the edit.
+
+> **Verified against OpenCode 2.0.21:** post-edit snapshots are driven by `ctx.tool.hook("execute.after")`.
+> The public `filesystem.changed` event is only emitted for out-of-band filesystem changes, **not** for agent tool
+> writes, so it is registered as a debounced fallback rather than the primary post-edit signal.
 
 ### Migrating from V1
 
@@ -134,7 +139,7 @@ The V1 plugin API was replaced by a domain-based V2 API. The hook migration is n
 | V1 hook | V2 API |
 | --- | --- |
 | `tool.execute.before` | `ctx.tool.hook("execute.before", …)` |
-| `file.edited` | `ctx.event.subscribe()` → `filesystem.changed` |
+| `file.edited` | `ctx.tool.hook("execute.after", …)` (verified: `filesystem.changed` does not fire for agent tool writes) |
 | `session.created` | `ctx.event.subscribe()` → `session.created` |
 | `session.compacted` | `ctx.event.subscribe()` → `session.compaction.ended` |
 | returned `event` hook | `ctx.event.subscribe()` |
@@ -174,6 +179,8 @@ Restore semantics:
 - **Dry-run** (default) reports what would happen and writes nothing.
 - `--yes` restores, but files that differ from the snapshot are treated as **conflicts** and left untouched.
 - `--force` / `--overwrite` overwrites conflicting files. Restore never silently overwrites your current work.
+- **Redacted files are never restored.** A snapshot stores `[REDACTED]` placeholders instead of real secret values,
+  so restoring them would destroy live credentials. Redacted files are skipped and reported; re-enter secrets manually.
 - A `pre-restore` recovery snapshot is recorded automatically before a restore (unless `--force`).
 
 ### Prune
@@ -320,7 +327,7 @@ npm run build       # clean + tsc
 npm test            # bun test
 ```
 
-The suite contains **274 tests** across 19 files covering snapshots, restore behavior, concurrency, security, prune,
+The suite contains **278 tests** across 19 files covering snapshots, restore behavior, concurrency, security, prune,
 CLI, packaging, and the OpenCode V2 plugin surface. Tests are hermetic and use isolated `/tmp` directories and an
 isolated global-config directory.
 
@@ -335,6 +342,10 @@ Test framework: `bun test`.
 - **No selective restore** — restores all files in a snapshot.
 - **Fail-closed skips** — malformed JSON config files are skipped rather than stored, because their contents cannot be
   proven secret-free.
+- **Redacted files are not restored** — snapshots store `[REDACTED]` placeholders rather than real secret values, so
+  restore skips those files and reports them; re-enter secrets manually after a restore.
+- **Post-edit signal** — driven by `execute.after`; the `filesystem.changed` event does not fire for agent tool writes
+  and is used only as a fallback for out-of-band changes.
 - **Disk space check** — requires `minDiskSpaceMb` free or the snapshot fails.
 - **Historical secrets** — pre-existing secrets in old shadow commits are not rewritten automatically.
 

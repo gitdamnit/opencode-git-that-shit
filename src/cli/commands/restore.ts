@@ -68,6 +68,13 @@ export default async function restoreCommand(args: string[]): Promise<void> {
       console.log("\nConflicts are only overwritten with --force/--overwrite.");
     }
 
+    if (result.redacted.length > 0) {
+      console.log("\nRedacted files (snapshot holds placeholders; never restored):");
+      for (const file of result.redacted) {
+        console.log(`  ${file}`);
+      }
+    }
+
     console.log("\nTo perform restore, use: gts restore <hash> --yes");
     return;
   }
@@ -105,6 +112,13 @@ export default async function restoreCommand(args: string[]): Promise<void> {
   if (result.conflicts.length > 0) {
     console.log("\nConflicting files (need --force to overwrite):");
     for (const file of result.conflicts) {
+      console.log(`  ${file}`);
+    }
+  }
+
+  if (result.redacted.length > 0) {
+    console.log("\nRedacted files skipped (snapshot holds placeholders; re-enter secrets manually):");
+    for (const file of result.redacted) {
       console.log(`  ${file}`);
     }
   }

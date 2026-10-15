@@ -49,6 +49,12 @@ hashes, not contents. Plugin logs report only hashes, types, and reasons.
 All mutations run under an atomic project-scoped lock, so two sessions or processes cannot corrupt the shadow
 repository. See `docs/ARCHITECTURE.md`.
 
+## Restore and redacted files
+
+Snapshots store redacted copies, so a redacted file's stored content contains `[REDACTED]` placeholders rather than the
+real secret values. Restore therefore **never** writes a redacted file: it is skipped and reported. Writing placeholders
+over a live config would silently destroy working credentials. After restoring, re-enter any secrets manually.
+
 ## Path safety
 
 `Tracker.shouldTrack` rejects absolute paths and any path containing a `..` segment. The snapshot and restore engines

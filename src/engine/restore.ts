@@ -10,6 +10,13 @@ import { getShadowRepoPath, ensureDir, fileExists } from "../shared/paths.js";
 import type { RestoreSnapshotInput, RestoreResult, RestoreMode } from "../shared/types.js";
 
 /**
+ * Marker written by the redactor. Any stored file containing it is a redacted
+ * copy whose real secret values are intentionally absent, so restoring it would
+ * replace live secrets with placeholders.
+ */
+const REDACTION_MARKER = "[REDACTED]";
+
+/**
  * Restore a snapshot.
  *
  * - `dry-run` reports what would happen and writes nothing.
@@ -18,6 +25,9 @@ import type { RestoreSnapshotInput, RestoreResult, RestoreMode } from "../shared
  *   set; otherwise they are reported and left untouched.
  * - `to-temp` writes the snapshot into a temporary directory instead of the
  *   project.
+ *
+ * Redacted files are never restored unless `force` is set, because their stored
+ * content contains `[REDACTED]` placeholders, not the real secret values.
  *
  * The actual restore runs exactly once, inside a single exclusive lock, so it
  * can never be applied twice or race another session.
@@ -54,6 +64,7 @@ export async function restoreSnapshot(input: RestoreSnapshotInput): Promise<Rest
         skipped: [],
         missing: [],
         conflicts: [],
+        redacted: [],
         error: `Pre-restore snapshot failed: ${preRestoreResult.reason}. Use --force to skip.`,
       };
     }
@@ -82,6 +93,7 @@ export async function restoreSnapshot(input: RestoreSnapshotInput): Promise<Rest
       skipped: [],
       missing: [],
       conflicts: [],
+      redacted: [],
       error: (error as Error).message,
     };
   }
@@ -98,6 +110,10 @@ function isGlobalFile(file: string): boolean {
 function isWithin(root: string, candidate: string): boolean {
   const rel = path.relative(root, candidate);
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+function containsRedaction(content: string): boolean {
+  return content.includes(REDACTION_MARKER);
 }
 
 export async function dryRunRestore(
@@ -117,6 +133,7 @@ export async function dryRunRestore(
     const wouldRestore: string[] = [];
     const missing: string[] = [];
     const conflicts: string[] = [];
+    const redacted: string[] = [];
 
     for (const file of snapshotFiles) {
       if (isShadowInternalFile(file) || isGlobalFile(file)) {
@@ -128,13 +145,18 @@ export async function dryRunRestore(
         continue;
       }
 
+      const snapshotContent = await git.getFileAtCommit(shadowPath, found.hash, file);
+      if (containsRedaction(snapshotContent)) {
+        redacted.push(file);
+        continue;
+      }
+
       wouldRestore.push(file);
 
       if (!fileExists(projectPath)) {
         missing.push(file);
       } else {
         const existing = await readText(projectPath);
-        const snapshotContent = await git.getFileAtCommit(shadowPath, found.hash, file);
         if (existing !== snapshotContent) {
           conflicts.push(file);
         }
@@ -150,6 +172,7 @@ export async function dryRunRestore(
       skipped: [],
       missing,
       conflicts,
+      redacted,
     };
   } catch (error) {
     return errorResult("dry-run", (error as Error).message);
@@ -175,6 +198,7 @@ async function realRestore(
   const skipped: Array<{ path: string; reason: string }> = [];
   const missing: string[] = [];
   const conflicts: string[] = [];
+  const redacted: string[] = [];
 
   try {
     const snapshotFiles = await git.listFilesAtCommit(shadowPath, targetHash);
@@ -189,6 +213,7 @@ async function realRestore(
         skipped,
         missing,
         conflicts,
+        redacted,
         tempDir,
         error: `Snapshot ${hash} has no files or does not exist`,
       };
@@ -204,6 +229,18 @@ async function realRestore(
       }
 
       const content = await git.getFileAtCommit(shadowPath, targetHash, file);
+
+      // Never substitute redaction placeholders for live secrets. Redacted
+      // files are always skipped, because the snapshot holds placeholders, not
+      // the real values, and writing them would destroy live credentials.
+      if (containsRedaction(content)) {
+        redacted.push(file);
+        skipped.push({
+          path: file,
+          reason: "redacted snapshot content (not restored; re-enter secrets manually)",
+        });
+        continue;
+      }
 
       if (mode === "to-temp" && tempDir) {
         const destPath = path.join(tempDir, file);
@@ -260,6 +297,7 @@ async function realRestore(
       skipped,
       missing,
       conflicts,
+      redacted,
       tempDir,
     };
   } catch (error) {
@@ -272,6 +310,7 @@ async function realRestore(
       skipped,
       missing,
       conflicts,
+      redacted,
       tempDir,
       error: (error as Error).message,
     };
@@ -348,7 +387,10 @@ async function resolveManifestEntry(
   return null;
 }
 
-function findEntry(entries: Array<{ hash: string; shortHash: string }>, needle: string): string | null {
+function findEntry(
+  entries: Array<{ hash: string; shortHash: string }>,
+  needle: string
+): string | null {
   const exact = entries.find((e) => e.hash === needle || e.shortHash === needle);
   if (exact) {
     return exact.hash;
@@ -380,6 +422,7 @@ function errorResult(mode: RestoreMode, message: string): RestoreResult {
     skipped: [],
     missing: [],
     conflicts: [],
+    redacted: [],
     error: message,
   };
 }

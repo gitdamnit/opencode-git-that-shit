@@ -160,6 +160,60 @@ describe("restore behavior", () => {
     expect(result.error).toBeDefined();
   });
 
+  it("does not restore redacted files without force", async () => {
+    const { snapshot, restore } = await engine();
+    const ocPath = path.join(testDir, "opencode.json");
+    fs.writeFileSync(ocPath, JSON.stringify({ apiKey: "sk-LIVE-SECRET", name: "x" }));
+
+    const snap = await snapshot({
+      projectRoot: testDir,
+      reason: "with secret",
+      type: "manual",
+      trigger: "test",
+    });
+
+    // Simulate a damaged file after the snapshot.
+    fs.writeFileSync(ocPath, "{ damaged");
+
+    const result = await restore.restoreSnapshot({
+      projectRoot: testDir,
+      hash: snap.hash!,
+      mode: "overwrite",
+      force: false,
+    });
+
+    expect(result.redacted).toContain("opencode.json");
+    // The live file must not be replaced with [REDACTED] placeholders.
+    expect(fs.readFileSync(ocPath, "utf-8")).toBe("{ damaged");
+  });
+
+  it("never restores redacted files, even with force", async () => {
+    const { snapshot, restore } = await engine();
+    const ocPath = path.join(testDir, "opencode.json");
+    fs.writeFileSync(ocPath, JSON.stringify({ apiKey: "sk-LIVE-SECRET2", name: "x" }));
+
+    const snap = await snapshot({
+      projectRoot: testDir,
+      reason: "with secret 2",
+      type: "manual",
+      trigger: "test",
+    });
+
+    fs.writeFileSync(ocPath, "{ damaged");
+
+    const result = await restore.restoreSnapshot({
+      projectRoot: testDir,
+      hash: snap.hash!,
+      mode: "overwrite",
+      force: true,
+    });
+
+    expect(result.redacted).toContain("opencode.json");
+    expect(result.restored).not.toContain("opencode.json");
+    // Live file is left untouched; no placeholders are written.
+    expect(fs.readFileSync(ocPath, "utf-8")).toBe("{ damaged");
+  });
+
   it("performs the restore exactly once (regression guard)", () => {
     // The original implementation invoked realRestore both inside and outside
     // the lock, executing the restore twice. Guard against that regression.
