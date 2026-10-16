@@ -3,6 +3,7 @@ import * as git from "./git.js";
 import * as manifest from "./manifest.js";
 import * as lock from "./lock.js";
 import { getProjectStateDir, getShadowRepoPath, ensureDir } from "../shared/paths.js";
+import { ensurePrivateDir, hardenFile } from "../shared/permissions.js";
 import { LockError } from "../shared/errors.js";
 import type { ManifestEntry } from "../shared/types.js";
 
@@ -95,12 +96,13 @@ async function doPrune(projectRoot: string, plan: PrunePlan): Promise<PruneResul
 
   // 1. Safety bundle before any rewrite.
   const backupDir = getProjectStateDir(projectRoot);
-  ensureDir(backupDir);
+  ensurePrivateDir(backupDir);
   const backupPath = path.join(
     backupDir,
     `prune-backup-${new Date().toISOString().replace(/[:.]/g, "-")}.bundle`
   );
   await git.createBundle(shadowPath, backupPath);
+  hardenFile(backupPath);
 
   // 2. Rewrite history: replay the kept commits as a fresh linear chain.
   const newHashes: string[] = [];

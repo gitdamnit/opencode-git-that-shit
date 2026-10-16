@@ -6,7 +6,12 @@ import * as manifest from "./manifest.js";
 import * as lock from "./lock.js";
 import { snapshot } from "./snapshot.js";
 import { loadConfig, DEFAULT_CONFIG } from "./config.js";
-import { getShadowRepoPath, ensureDir, fileExists } from "../shared/paths.js";
+import {
+  sanitizeText,
+  formatSnapshotFailureWarning,
+  shouldBlockOperation,
+} from "./safety.js";
+import { getShadowRepoPath, fileExists } from "../shared/paths.js";
 import type { RestoreSnapshotInput, RestoreResult, RestoreMode } from "../shared/types.js";
 
 /**
@@ -26,8 +31,9 @@ const REDACTION_MARKER = "[REDACTED]";
  * - `to-temp` writes the snapshot into a temporary directory instead of the
  *   project.
  *
- * Redacted files are never restored unless `force` is set, because their stored
- * content contains `[REDACTED]` placeholders, not the real secret values.
+ * Redacted files are never restored, because their stored content contains
+ * `[REDACTED]` placeholders, not the real secret values. This holds even when
+ * `force` is set.
  *
  * The actual restore runs exactly once, inside a single exclusive lock, so it
  * can never be applied twice or race another session.
@@ -41,6 +47,7 @@ export async function restoreSnapshot(input: RestoreSnapshotInput): Promise<Rest
     return await dryRunRestore(projectRoot, hash);
   }
 
+  const warnings: string[] = [];
   let preRestoreHash: string | undefined;
 
   if (config.restore.autoPreRestoreSnapshot && !force) {
@@ -53,24 +60,45 @@ export async function restoreSnapshot(input: RestoreSnapshotInput): Promise<Rest
 
     // "no-changes" means the current state is already captured by the latest
     // snapshot, so that snapshot is our recovery point and we can continue.
-    // Any other failure (locked, low-disk, error) aborts the restore.
-    if (!preRestoreResult.committed && preRestoreResult.reason !== "no-changes") {
-      return {
-        mode,
-        restored: [],
-        wouldRestore: [],
-        overwritten: [],
-        created: [],
-        skipped: [],
-        missing: [],
-        conflicts: [],
-        redacted: [],
-        error: `Pre-restore snapshot failed: ${preRestoreResult.reason}. Use --force to skip.`,
-      };
-    }
+    const hasRecoveryPoint =
+      preRestoreResult.committed ||
+      preRestoreResult.reason === "no-changes" ||
+      preRestoreResult.verified === true;
 
-    preRestoreHash =
-      preRestoreResult.hash ?? (await manifest.getLastSnapshot(projectRoot))?.hash ?? undefined;
+    if (!hasRecoveryPoint) {
+      const warning = formatSnapshotFailureWarning(
+        preRestoreResult,
+        config.snapshot.failureMode
+      );
+
+      // Strict mode refuses to restore without a verified recovery point.
+      // Designated destructive operation; blocking is restricted to this class.
+      if (shouldBlockOperation("destructive", config.snapshot.failureMode)) {
+        return {
+          mode,
+          restored: [],
+          wouldRestore: [],
+          overwritten: [],
+          created: [],
+          skipped: [],
+          missing: [],
+          conflicts: [],
+          redacted: [],
+          warnings: [warning],
+          error:
+            `Pre-restore snapshot failed (${preRestoreResult.reason}) and strict mode ` +
+            `blocks restoring without a recovery point. Use --force to override.`,
+        };
+      }
+
+      // Standard mode: continue, but never claim a recovery point exists.
+      warnings.push(
+        `${warning} Continuing in standard mode without a new recovery point for this restore.`
+      );
+    } else {
+      preRestoreHash =
+        preRestoreResult.hash ?? (await manifest.getLastSnapshot(projectRoot))?.hash ?? undefined;
+    }
   }
 
   try {
@@ -81,7 +109,11 @@ export async function restoreSnapshot(input: RestoreSnapshotInput): Promise<Rest
       () => realRestore(projectRoot, hash, mode, force)
     );
 
-    return { ...result, preRestoreHash: preRestoreHash ?? result.preRestoreHash };
+    return {
+      ...result,
+      preRestoreHash: preRestoreHash ?? result.preRestoreHash,
+      warnings: [...(result.warnings ?? []), ...warnings],
+    };
   } catch (error) {
     return {
       mode,
@@ -94,7 +126,8 @@ export async function restoreSnapshot(input: RestoreSnapshotInput): Promise<Rest
       missing: [],
       conflicts: [],
       redacted: [],
-      error: (error as Error).message,
+      warnings,
+      error: sanitizeText((error as Error).message),
     };
   }
 }
@@ -116,11 +149,118 @@ function containsRedaction(content: string): boolean {
   return content.includes(REDACTION_MARKER);
 }
 
+async function realRootOf(dir: string): Promise<string> {
+  try {
+    return await fs.realpath(dir);
+  } catch {
+    return path.resolve(dir);
+  }
+}
+
+/**
+ * Reject any destination that could escape the project through a symlink.
+ *
+ * Path traversal (`..`) and absolute paths are already rejected lexically by
+ * {@link isWithin}. Lexical checks cannot see symlinks, so this resolves the
+ * nearest *existing* ancestor of the destination and requires its real path to
+ * stay within the real project root. It also refuses a destination that is
+ * itself a symlink, so a restore can never be tricked into writing through a
+ * pre-planted link.
+ */
+async function checkDestination(
+  realRoot: string,
+  destPath: string
+): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    const stat = await fs.lstat(destPath);
+    if (stat.isSymbolicLink()) {
+      return { ok: false, reason: "destination is a symlink (refused)" };
+    }
+  } catch {
+    // Destination does not exist yet: fine.
+  }
+
+  let ancestor = path.dirname(destPath);
+  for (;;) {
+    try {
+      const real = await fs.realpath(ancestor);
+      if (!isWithin(realRoot, real)) {
+        return { ok: false, reason: "destination resolves outside the project (symlink) (refused)" };
+      }
+      return { ok: true };
+    } catch {
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) {
+        return { ok: false, reason: "destination directory is not resolvable (refused)" };
+      }
+      ancestor = parent;
+    }
+  }
+}
+
+/**
+ * Write `content` to `destPath` atomically and without following symlinks.
+ *
+ * The content is written to a sibling temporary file opened with `O_EXCL` and
+ * `O_NOFOLLOW`, then `rename`d into place. `rename` replaces a symlink at the
+ * destination rather than writing through it, which closes the
+ * symlink-substitution window between validation and writing.
+ */
+export async function safeWriteFile(
+  realRoot: string,
+  destPath: string,
+  content: string
+): Promise<{ ok: boolean; reason?: string }> {
+  const before = await checkDestination(realRoot, destPath);
+  if (!before.ok) {
+    return before;
+  }
+
+  const dir = path.dirname(destPath);
+  await fs.mkdir(dir, { recursive: true });
+
+  // Re-validate immediately before writing: an ancestor symlink could have been
+  // swapped in while the directory was being created.
+  const after = await checkDestination(realRoot, destPath);
+  if (!after.ok) {
+    return after;
+  }
+
+  const tmpPath = path.join(
+    dir,
+    `.gts-restore-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`
+  );
+
+  const flags =
+    fs.constants.O_WRONLY |
+    fs.constants.O_CREAT |
+    fs.constants.O_EXCL |
+    (typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0);
+
+  let handle: fs.FileHandle | undefined;
+  try {
+    handle = await fs.open(tmpPath, flags, 0o600);
+    await handle.writeFile(content, "utf-8");
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await fs.rename(tmpPath, destPath);
+    return { ok: true };
+  } catch (error) {
+    if (handle) {
+      await handle.close().catch(() => {});
+    }
+    await fs.unlink(tmpPath).catch(() => {});
+    return { ok: false, reason: `write failed: ${sanitizeText((error as Error).message)}` };
+  }
+}
+
 export async function dryRunRestore(
   projectRoot: string,
   hash: string
 ): Promise<RestoreResult> {
   const shadowPath = getShadowRepoPath(projectRoot);
+  const realRoot = await realRootOf(projectRoot);
 
   try {
     const found = await resolveManifestEntry(projectRoot, hash);
@@ -134,6 +274,7 @@ export async function dryRunRestore(
     const missing: string[] = [];
     const conflicts: string[] = [];
     const redacted: string[] = [];
+    const skipped: Array<{ path: string; reason: string }> = [];
 
     for (const file of snapshotFiles) {
       if (isShadowInternalFile(file) || isGlobalFile(file)) {
@@ -142,6 +283,13 @@ export async function dryRunRestore(
 
       const projectPath = path.join(projectRoot, file);
       if (!isWithin(projectRoot, projectPath)) {
+        skipped.push({ path: file, reason: "unsafe path (refused)" });
+        continue;
+      }
+
+      const destCheck = await checkDestination(realRoot, projectPath);
+      if (!destCheck.ok) {
+        skipped.push({ path: file, reason: destCheck.reason ?? "unsafe destination (refused)" });
         continue;
       }
 
@@ -169,13 +317,13 @@ export async function dryRunRestore(
       wouldRestore,
       overwritten: [],
       created: [],
-      skipped: [],
+      skipped,
       missing,
       conflicts,
       redacted,
     };
   } catch (error) {
-    return errorResult("dry-run", (error as Error).message);
+    return errorResult("dry-run", sanitizeText((error as Error).message));
   }
 }
 
@@ -186,11 +334,13 @@ async function realRestore(
   force?: boolean
 ): Promise<RestoreResult> {
   const shadowPath = getShadowRepoPath(projectRoot);
+  const realRoot = await realRootOf(projectRoot);
   const found = await resolveManifestEntry(projectRoot, hash);
   const targetHash = found?.hash ?? hash;
 
   const tempDir =
     mode === "to-temp" ? await fs.mkdtemp(path.join(os.tmpdir(), "gts-restore-")) : undefined;
+  const tempRoot = tempDir ? await realRootOf(tempDir) : undefined;
 
   const restored: string[] = [];
   const overwritten: string[] = [];
@@ -242,27 +392,33 @@ async function realRestore(
         continue;
       }
 
-      if (mode === "to-temp" && tempDir) {
+      if (mode === "to-temp" && tempDir && tempRoot) {
         const destPath = path.join(tempDir, file);
         if (!isWithin(tempDir, destPath)) {
-          skipped.push({ path: file, reason: "unsafe path" });
+          skipped.push({ path: file, reason: "unsafe path (refused)" });
           continue;
         }
-        ensureDir(path.dirname(destPath));
-        await fs.writeFile(destPath, content, "utf-8");
+        const write = await safeWriteFile(tempRoot, destPath, content);
+        if (!write.ok) {
+          skipped.push({ path: file, reason: write.reason ?? "unsafe destination (refused)" });
+          continue;
+        }
         restored.push(file);
         continue;
       }
 
       const projectPath = path.join(projectRoot, file);
       if (!isWithin(projectRoot, projectPath)) {
-        skipped.push({ path: file, reason: "unsafe path" });
+        skipped.push({ path: file, reason: "unsafe path (refused)" });
         continue;
       }
 
       if (!fileExists(projectPath)) {
-        ensureDir(path.dirname(projectPath));
-        await fs.writeFile(projectPath, content, "utf-8");
+        const write = await safeWriteFile(realRoot, projectPath, content);
+        if (!write.ok) {
+          skipped.push({ path: file, reason: write.reason ?? "unsafe destination (refused)" });
+          continue;
+        }
         created.push(file);
         restored.push(file);
         continue;
@@ -279,8 +435,11 @@ async function realRestore(
       conflicts.push(file);
 
       if (force) {
-        ensureDir(path.dirname(projectPath));
-        await fs.writeFile(projectPath, content, "utf-8");
+        const write = await safeWriteFile(realRoot, projectPath, content);
+        if (!write.ok) {
+          skipped.push({ path: file, reason: write.reason ?? "unsafe destination (refused)" });
+          continue;
+        }
         overwritten.push(file);
         restored.push(file);
       } else {
@@ -312,7 +471,7 @@ async function realRestore(
       conflicts,
       redacted,
       tempDir,
-      error: (error as Error).message,
+      error: sanitizeText((error as Error).message),
     };
   }
 }

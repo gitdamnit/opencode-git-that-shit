@@ -8,6 +8,7 @@ import * as lock from "./lock.js";
 import { LockError } from "../shared/errors.js";
 import { checkDiskSpace, checkFileSize } from "./disk.js";
 import { loadConfig, DEFAULT_CONFIG } from "./config.js";
+import { sanitizeText, formatSnapshotFailureWarning } from "./safety.js";
 import {
   getShadowRepoPath,
   getLegacyShadowRepoPath,
@@ -18,6 +19,12 @@ import {
   copyFile,
   fileExists,
 } from "../shared/paths.js";
+import {
+  ensurePrivateDir,
+  hardenDir,
+  hardenFile,
+  hardenProjectState,
+} from "../shared/permissions.js";
 import type {
   SnapshotInput,
   SnapshotResult,
@@ -71,7 +78,11 @@ export async function initShadowRepo(projectRoot: string): Promise<void> {
   await migrateLegacyShadowRepo(projectRoot);
 
   const shadowPath = getShadowRepoPath(projectRoot);
-  ensureDir(shadowPath);
+  // Private storage: the shadow repository and its parent state directories
+  // are created (and tightened) to owner-only access before any snapshot
+  // content is written into them.
+  ensurePrivateDir(getProjectStateDir(projectRoot));
+  ensurePrivateDir(shadowPath);
 
   const hasOwnGit = git.hasOwnGitDir(shadowPath);
 
@@ -83,18 +94,24 @@ export async function initShadowRepo(projectRoot: string): Promise<void> {
     await git.writeGitignore(shadowPath, ".gts.lock\n.git-that-shit/manifest.jsonl\n");
   }
 
-  ensureDir(path.join(shadowPath, ".git-that-shit"));
+  ensurePrivateDir(path.join(shadowPath, ".git-that-shit"));
+
+  // Tighten every storage directory we own. Only the `.git-that-shit` tree is
+  // touched; user project files and unrelated directories are never chmod'ed.
+  hardenProjectState(projectRoot);
 }
 
 function failure(reason: SnapshotReason, input: SnapshotInput, error?: string): SnapshotResult {
   return {
     committed: false,
     reason,
+    verified: false,
+    failureCode: reason,
     filesCopied: [],
     filesSkipped: [],
     filesRedacted: [],
     timestamp: new Date().toISOString(),
-    error,
+    error: error ? sanitizeText(error) : undefined,
   };
 }
 
@@ -124,6 +141,19 @@ async function doSnapshot(input: SnapshotInput): Promise<SnapshotResult> {
   const tracker = createTracker(config);
   const redactor = createRedactor(tracker);
   const shadowPath = getShadowRepoPath(projectRoot);
+  const gitTimeout = config.snapshot.gitTimeoutMs;
+
+  // Command previews and manual snapshot messages can legitimately contain a
+  // credential (for example `token=…` on a shell command). Sanitize before the
+  // value can reach the commit message, the manifest, the result or a log.
+  const secretKeys = config.secrets.redactKeys;
+  const safeReason = sanitizeText(reason, secretKeys);
+  const safeOperation = operation
+    ? {
+        tool: operation.tool,
+        preview: operation.preview ? sanitizeText(operation.preview, secretKeys) : undefined,
+      }
+    : undefined;
 
   await initShadowRepo(projectRoot);
 
@@ -173,7 +203,7 @@ async function doSnapshot(input: SnapshotInput): Promise<SnapshotResult> {
 
     if (wasRedacted) {
       filesRedacted.push(relPath);
-      ensureDir(path.dirname(destPath));
+      ensurePrivateDir(path.dirname(destPath));
       await fs.writeFile(destPath, content, "utf-8");
     } else {
       if (!copyFile(srcPath, destPath)) {
@@ -182,6 +212,9 @@ async function doSnapshot(input: SnapshotInput): Promise<SnapshotResult> {
       }
     }
 
+    // Snapshot copies are private storage. The enclosing shadow directory is
+    // already 0700; tighten each stored file to 0600 as defence in depth.
+    hardenFile(destPath);
     filesCopied.push(relPath);
   }
 
@@ -209,8 +242,9 @@ async function doSnapshot(input: SnapshotInput): Promise<SnapshotResult> {
       continue;
     }
 
-    ensureDir(path.dirname(destPath));
+    ensurePrivateDir(path.dirname(destPath));
     await fs.writeFile(destPath, content, "utf-8");
+    hardenFile(destPath);
     if (wasRedacted) {
       filesRedacted.push(relDest);
     }
@@ -221,6 +255,8 @@ async function doSnapshot(input: SnapshotInput): Promise<SnapshotResult> {
     return {
       committed: false,
       reason: "no-changes",
+      verified: false,
+      failureCode: "no-changes",
       filesCopied: [],
       filesSkipped,
       filesRedacted: [],
@@ -228,13 +264,15 @@ async function doSnapshot(input: SnapshotInput): Promise<SnapshotResult> {
     };
   }
 
-  await git.addAll(shadowPath);
+  await git.addAll(shadowPath, gitTimeout);
 
-  const hasChanges = await git.hasStagedChanges(shadowPath);
+  const hasChanges = await git.hasStagedChanges(shadowPath, gitTimeout);
   if (!hasChanges) {
     return {
       committed: false,
       reason: "no-changes",
+      verified: false,
+      failureCode: "no-changes",
       filesCopied,
       filesSkipped,
       filesRedacted,
@@ -242,8 +280,27 @@ async function doSnapshot(input: SnapshotInput): Promise<SnapshotResult> {
     };
   }
 
-  const commitMessage = formatCommitMessage(type, reason, trigger, operation, sessionId);
-  const hash = await git.commit(shadowPath, commitMessage);
+  const commitMessage = formatCommitMessage(type, safeReason, trigger, safeOperation, sessionId);
+  const hash = await git.commit(shadowPath, commitMessage, gitTimeout);
+
+  // Never claim a snapshot exists unless its creation is verified: confirm the
+  // hash resolves to a real commit object in the shadow repository.
+  const verified = await git.commitExists(shadowPath, hash, gitTimeout);
+  if (!verified || !hash) {
+    return {
+      committed: false,
+      reason: "error",
+      verified: false,
+      failureCode: "error",
+      filesCopied,
+      filesSkipped,
+      filesRedacted,
+      timestamp: new Date().toISOString(),
+      error: sanitizeText("commit could not be verified in the shadow repository", secretKeys),
+      warnings: [formatSnapshotFailureWarning({ reason: "error" }, config.snapshot.failureMode)],
+    };
+  }
+
   const shortHash = await git.getShortHash(shadowPath, hash);
 
   const manifestEntry: ManifestEntry = {
@@ -252,8 +309,8 @@ async function doSnapshot(input: SnapshotInput): Promise<SnapshotResult> {
     timestamp: new Date().toISOString(),
     type,
     trigger,
-    reason,
-    operation,
+    reason: safeReason,
+    operation: safeOperation,
     sessionId,
     filesCopied,
     filesSkipped,
@@ -265,6 +322,7 @@ async function doSnapshot(input: SnapshotInput): Promise<SnapshotResult> {
   return {
     committed: true,
     reason: "committed",
+    verified: true,
     hash,
     shortHash,
     filesCopied,

@@ -228,13 +228,43 @@ Config lives at `.git-that-shit/git-that-shit/config.json`:
   },
   "snapshot": {
     "maxFileSizeMb": 10,             // skip files larger than 10 MB
-    "minDiskSpaceMb": 100            // fail if less than 100 MB free
+    "minDiskSpaceMb": 100,           // fail if less than 100 MB free
+    "gitTimeoutMs": 30000,           // subprocess timeout for shadow-repo git operations
+    "failureMode": "standard"        // standard | strict (see below)
   },
   "restore": {
     "autoPreRestoreSnapshot": true   // snapshot before a restore
   }
 }
 ```
+
+---
+
+## Snapshot failure behavior
+
+A protective snapshot is created before risky operations, but snapshots can fail (no disk space, a locked project,
+repository corruption, a timeout, an unreadable file). Git That Shit never claims a snapshot exists unless the commit
+was **verified** to resolve in the shadow repository, and it never blocks a harmless command because the snapshot
+engine is unhealthy.
+
+Two configurable modes (`snapshot.failureMode`):
+
+| Mode | Behavior when a required snapshot cannot be created |
+| --- | --- |
+| **`standard`** (default) | The requested operation **continues**. A clear, credential-free warning is emitted, and no recovery point is claimed. |
+| **`strict`** (opt-in) | Git That Shit **attempts to block** exclusively classified *destructive* operations (e.g. `git reset --hard`, `git clean -fd`, `rm -rf`). Risky package-manager operations, config writes and harmless commands are never blocked. |
+
+In strict mode, blocking uses the OpenCode V2 `permission.evaluate` gate: when the protective snapshot for a specific
+tool call fails, that **exact** tool call is denied with an explanatory message. Two honest caveats are documented in
+`docs/INTEROP.md`:
+
+- The `execute.before` *tool hook* returns `void` and **cannot** veto an operation; only `permission.evaluate` can.
+- The SDK does not specify the ordering of `permission.evaluate` relative to `execute.before`, so blocking is
+  **best-effort**. If no permission gate is exposed, strict mode **fails open**, logs that the operation was *not*
+  blocked, and does not pretend otherwise.
+
+Strict mode also makes the restore path fail closed: a restore whose mandatory pre-restore snapshot cannot be created is
+refused (unless `--force`). This path is guaranteed because Git That Shit owns it.
 
 ---
 
@@ -298,6 +328,10 @@ storage, or initialization with the others.
 completes before the risky operation runs. Verified against OpenCode 2.0.21: a deliberately delayed `execute.before`
 hook retained the tool until the hook (including the snapshot commit) returned. (Note: the tool part's `time.start` is
 recorded when the call is created, before hooks run; execution completes after the hook returns.)
+
+The `execute.before` hook is **awaited, but it cannot veto** the tool: its callback returns `void` and there is no
+documented throw-to-block contract. Pre-execution *blocking* therefore uses the separate `permission.evaluate` gate and
+is only available in **strict mode**; see [Snapshot failure behavior](#snapshot-failure-behavior) and `docs/INTEROP.md`.
 
 ### Companion behavior
 
@@ -380,8 +414,9 @@ npm run build       # clean + tsc
 npm test            # bun test
 ```
 
-The suite contains **287 tests** across 20 files covering snapshots, restore behavior, concurrency, security, prune,
-CLI, packaging, independence/interoperability, and the OpenCode V2 plugin surface. Tests are hermetic and use isolated
+The suite contains **322 tests** across 24 files covering snapshots, snapshot-failure behavior, restore behavior and
+restore security, filesystem permissions, concurrency, security, prune, CLI, packaging, independence/interoperability,
+and the OpenCode V2 plugin surface (including strict-mode pre-execution blocking). Tests are hermetic and use isolated
 `/tmp` directories and an isolated global-config directory.
 
 Test framework: `bun test`.
@@ -416,6 +451,14 @@ repository.
   and is used only as a fallback for out-of-band changes.
 - **Disk space check** — requires `minDiskSpaceMb` free or the snapshot fails.
 - **Historical secrets** — pre-existing secrets in old shadow commits are not rewritten automatically.
+- **Strict-mode blocking is best-effort** — the SDK's `execute.before` hook cannot veto an operation, and the ordering
+  of `permission.evaluate` relative to it is unspecified. Strict mode fails open (with a loud warning) when no gate is
+  available. Restore's strict check is guaranteed because Git That Shit owns that path.
+- **Private storage permissions are POSIX-only** — snapshot directories use `0700` and files `0600` on Linux/macOS.
+  Windows has no equivalent POSIX mode; permission enforcement there relies on the platform ACL model.
+- **Symlink hardening is best-effort against a local attacker** — restore refuses symlinked destinations and resolves
+  the nearest existing ancestor, and writes atomically via `rename` so a symlink cannot be substituted between
+  validation and writing. A determined same-user attacker racing the filesystem is still out of scope.
 
 ---
 

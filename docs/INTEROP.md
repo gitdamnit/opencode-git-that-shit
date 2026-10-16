@@ -30,13 +30,34 @@ Git That Shit conforms to the shared independence standard for toolkit plugins:
 
 ### Hook independence
 
-- Git That Shit registers `ctx.tool.hook("execute.before")`, `ctx.tool.hook("execute.after")`, and a
-  `ctx.event.subscribe()` subscription.
+- Git That Shit registers `ctx.tool.hook("execute.before")`, `ctx.tool.hook("execute.after")`, a
+  `ctx.event.subscribe()` subscription, and — when the SDK exposes it — a `permission.evaluate` hook.
 - Correctness does **not** depend on another plugin running first. It never reads another plugin's output and never
   assumes tool arguments were modified by another plugin.
-- Its hooks are **read-only** with respect to the tool event; they never mutate `event` or `event.input`.
+- Its hooks are **read-only** with respect to the tool event; they never mutate `event` or `event.input`. The
+  `permission.evaluate` callback is the single exception: it may set `effect = "deny"` and `message` on the permission
+  evaluation (the SDK's documented gate), and only for the exact tool call whose protective snapshot failed.
 - OpenCode awaits the async `execute.before` hook before running the tool (verified against 2.0.21), so the
   pre-operation snapshot completes before the risky operation. There is no claimed protection that is not provided.
+
+### Pre-execution blocking (strict mode)
+
+Strict mode is the only feature that attempts to stop an operation. Its limits are documented rather than hidden:
+
+- `execute.before` returns `void`. It is awaited, but the SDK documents **no** way for it to veto a tool, so Git That
+  Shit does not treat it as a blocking gate.
+- The only pre-execution gate in the 2.0.21 SDK is `permission.evaluate`, whose `PermissionEvaluation` exposes a mutable
+  `effect` (`"allow" | "deny" | "ask"`) and the originating tool call at `evaluation.source.id`.
+- The SDK does not specify whether `permission.evaluate` runs before or after `execute.before`. Strict mode therefore
+  records the tool-call id when the protective snapshot fails and denies that id if the permission hook is consulted.
+- If the SDK exposes no permission hook, strict mode **fails open**: it logs that the operation was *not* blocked and
+  does not advertise protection it cannot deliver.
+- The one guaranteed strict check is inside Git That Shit's own restore path: a restore whose mandatory pre-restore
+  snapshot cannot be created is refused unless `--force` is passed.
+
+Runtime confirmation of the deny path against a live OpenCode host was not performed in the isolated development
+environment (no live host); the gate is verified against the published 2.0.21 type definitions and exercised through the
+V2 plugin harness.
 
 ## Companion behavior
 

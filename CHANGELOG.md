@@ -26,13 +26,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Text redaction** — YAML/TOML/`.env`-style/`.jsonc`/shell files, `Authorization` headers, and multiline PEM blocks
   are redacted.
 - **Atomic locking** — exclusive-create lock acquisition with stale-lock ownership checks.
-- **Extended test suite** — 287 tests across 20 files, including concurrency, restore behavior, prune, security, CLI,
-  packaging, independence/interoperability, and the V2 plugin surface.
+- **Extended test suite** — 322 tests across 24 files, including snapshot-failure modes, restore security (symlink
+  traversal and substitution, traversal/absolute paths, interrupted writes, locking), filesystem permissions,
+  concurrency, restore behavior, prune, security, CLI, packaging, independence/interoperability, strict-mode blocking,
+  and the V2 plugin surface.
 - **Documentation** — `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/INTEROP.md`.
 - **Independence hardening** — hooks are failure-isolated (a snapshot error can never break a tool or another plugin)
   and read-only with respect to the tool event; verified that OpenCode awaits the async `execute.before` hook before
   running the tool, so pre-operation snapshots are genuinely blocking. Added the independence/interoperability
   standard, companion matrix, and Docker Plugin Test Lab compatibility notes.
+- **Configurable snapshot-failure modes** — `snapshot.failureMode` adds `standard` (default: continue with a clear
+  warning, never claim a recovery point) and `strict` (opt-in: deny classified *destructive* operations through the
+  OpenCode V2 `permission.evaluate` gate when their protective snapshot fails). Blocking is restricted to explicitly
+  classified operations and is documented as best-effort where the SDK cannot guarantee it.
+- **Verified snapshots** — `SnapshotResult.verified` is true only when the commit was confirmed to resolve in the shadow
+  repository; the plugin never treats an unverified snapshot as a recovery point.
+- **Restore symlink hardening** — refuse symlinked destinations, reject destinations whose nearest existing ancestor
+  resolves outside the project, and write atomically via `O_EXCL|O_NOFOLLOW` temp file + `rename`.
+- **Private storage permissions** — Git That Shit's own storage uses `0700` directories and `0600` files (config,
+  manifest, lock, snapshot copies, prune bundles), applied without recursing into user project directories.
+- **Configurable git timeout** — `snapshot.gitTimeoutMs` bounds shadow-repository git subprocesses.
 
 ### Fixed
 
@@ -60,6 +73,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   out-of-band changes.
 - **CLI snapshot exit code** — `gts snapshot` exits `0` on "no-changes" instead of `1`.
 - **CI** — workflows now install with `npm ci`, run typecheck/lint/build before tests, and require Bun for `bun test`.
+- **Command-preview secret leak** — destructive-command previews (and manual snapshot messages) are text-redacted
+  before they can reach the commit message, the manifest, a result object, or a log line.
+- **Unverified snapshots** — a commit that could not be resolved in the shadow repository is now reported as a failure
+  rather than a successful snapshot.
+- **Pre-restore snapshot block** — restore no longer aborts on any pre-restore snapshot failure in standard mode; it
+  continues with a warning and claims no recovery point, while strict mode refuses the restore.
+- **Restore write failures** — a failed or interrupted restore write is reported per file, leaves no temporary files
+  behind, and never partially applies through a symlink.
 
 ### Changed
 

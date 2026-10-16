@@ -1,6 +1,7 @@
 import * as fs from "fs/promises";
 import * as path from "path";
-import { getLockPath, ensureDir } from "../shared/paths.js";
+import { getLockPath } from "../shared/paths.js";
+import { PRIVATE_FILE_MODE, ensurePrivateDir, hardenFile } from "../shared/permissions.js";
 import type { LockFile } from "../shared/types.js";
 import { LockError } from "../shared/errors.js";
 
@@ -31,12 +32,13 @@ export async function acquireLock(
   const pid = process.pid;
   const timestamp = new Date().toISOString();
 
-  ensureDir(path.dirname(lockPath));
+  ensurePrivateDir(path.dirname(lockPath));
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
-      // Atomic create. O_EXCL fails if the file exists.
-      const handle = await fs.open(lockPath, "wx");
+      // Atomic create. O_EXCL fails if the file exists. Mode 0600 so the lock
+      // (which records the operation and reason) is never world-readable.
+      const handle = await fs.open(lockPath, "wx", PRIVATE_FILE_MODE);
       try {
         const lockFile: LockFile = { pid, timestamp, operation, reason };
         await handle.writeFile(JSON.stringify(lockFile, null, 2), "utf-8");
@@ -44,6 +46,7 @@ export async function acquireLock(
       } finally {
         await handle.close();
       }
+      hardenFile(lockPath, PRIVATE_FILE_MODE);
       return true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") {

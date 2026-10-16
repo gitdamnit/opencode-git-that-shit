@@ -38,6 +38,16 @@ export interface SnapshotResult {
   filesSkipped: Array<{ path: string; reason: string }>;
   filesRedacted: string[];
   timestamp: string;
+  /**
+   * True only when a commit was created *and* verified to resolve to a real
+   * commit object in the shadow repository. Callers must key protection off
+   * this flag, never off `committed` alone.
+   */
+  verified?: boolean;
+  /** Sanitized, human-readable warnings. Never contain secret values. */
+  warnings?: string[];
+  /** Structured, credential-free failure code (the `SnapshotReason`). */
+  failureCode?: SnapshotReason;
   error?: string;
 }
 
@@ -73,6 +83,8 @@ export interface RestoreResult {
   conflicts: string[];
   redacted: string[];
   tempDir?: string;
+  /** Sanitized, human-readable warnings. Never contain secret values. */
+  warnings?: string[];
   error?: string;
 }
 
@@ -98,6 +110,14 @@ export interface GitThatShitConfig {
   snapshot: {
     maxFileSizeMb: number;
     minDiskSpaceMb: number;
+    /** Subprocess timeout for shadow-repository git operations, in ms. */
+    gitTimeoutMs: number;
+    /**
+     * What to do when a protective pre-operation snapshot cannot be created:
+     *  - "standard" (default): let the requested operation continue, warn.
+     *  - "strict": attempt to block classified destructive operations.
+     */
+    failureMode: "standard" | "strict";
   };
   restore: {
     autoPreRestoreSnapshot: boolean;

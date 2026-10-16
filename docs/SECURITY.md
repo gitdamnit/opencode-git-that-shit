@@ -44,6 +44,40 @@ is secret-free. This is a deliberate trade-off: during an incident you prefer a 
 Secret values never appear in snapshot results, tool output, logs, or errors. Snapshot results contain file paths and
 hashes, not contents. Plugin logs report only hashes, types, and reasons.
 
+Diagnostic strings that could carry a credential — a destructive-command preview, a manual snapshot message, a git
+subprocess error — are passed through text redaction before they reach a commit message, the manifest, a result object,
+or a log line.
+
+## Filesystem permissions
+
+Private snapshot storage is created with owner-only permissions:
+
+| Path | Mode |
+| --- | --- |
+| `.git-that-shit/` (and nested state dirs) | `0700` |
+| Shadow repository (`…/snapshots/`) | `0700` |
+| Stored snapshot copies, manifest, config, lock file, prune bundle | `0600` |
+
+Newly created directories are `chmod`-ed after `mkdir` so the process umask cannot widen them. **Only directories and
+files Git That Shit owns under `.git-that-shit/` are modified**; user project files and unrelated directories are never
+recursively `chmod`-ed. Restored files are written with the platform default mode, exactly like ordinary user files.
+
+POSIX modes are applied on Linux and macOS only. Windows has no POSIX mode; enforcement there relies on the platform
+ACL model. Filesystems that reject `chmod` (some network/FAT mounts, hardened containers) degrade to a no-op — a failed
+`chmod` never fails a snapshot or restore.
+
+## Snapshot failure handling
+
+A protective snapshot can fail. Git That Shit (a) never reports a snapshot as existing unless the commit was verified to
+resolve in the shadow repository, and (b) applies a configurable `snapshot.failureMode`:
+
+- **`standard`** (default) — the requested operation continues; a credential-free warning is emitted; no recovery point
+  is claimed.
+- **`strict`** (opt-in) — exclusively classified *destructive* operations are denied through the OpenCode V2
+  `permission.evaluate` gate when their required snapshot fails. Risky package-manager operations, config writes and
+  harmless commands are never blocked. Blocking is **best-effort** (the SDK does not specify hook ordering) and fails
+  open with a warning if no permission gate is exposed; the restore path's strict check is guaranteed.
+
 ## Concurrent access
 
 All mutations run under an atomic project-scoped lock, so two sessions or processes cannot corrupt the shadow
@@ -60,6 +94,19 @@ over a live config would silently destroy working credentials. After restoring, 
 `Tracker.shouldTrack` rejects absolute paths and any path containing a `..` segment. The snapshot and restore engines
 additionally verify that every resolved source/destination stays within the project root (or the shadow repo / temp
 directory). Restore refuses to write outside the project.
+
+Restore goes further against symlink attacks, because a lexical `..` check cannot see symlinks:
+
+- A destination that is itself a symlink is **refused**.
+- The nearest existing ancestor of each destination is resolved with `realpath` and must stay within the real project
+  root, so a symlinked directory cannot redirect a write outside the project.
+- Writes are **atomic**: content is written to a sibling temporary file opened with `O_EXCL|O_NOFOLLOW`, then `rename`d
+  into place. `rename` replaces a symlink at the destination instead of writing through it, closing the
+  validate-then-write race.
+- A failed write is reported in `skipped` and its temporary file is removed, so a partially completed restore leaves no
+  stray files.
+
+Residual risk: a same-user attacker racing the filesystem is out of scope.
 
 ## Secrets already in history
 

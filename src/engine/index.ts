@@ -10,3 +10,4 @@ export * from "./restore.js";
 export * from "./detector.js";
 export * from "./doctor.js";
 export * from "./prune.js";
+export * from "./safety.js";

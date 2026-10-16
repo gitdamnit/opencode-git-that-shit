@@ -8,8 +8,15 @@ import * as doctorEngine from "../engine/doctor.js";
 import * as configEngine from "../engine/config.js";
 import * as detector from "../engine/detector.js";
 import * as pruneEngine from "../engine/prune.js";
+import {
+  PendingDenials,
+  formatBlockMessage,
+  formatSnapshotFailureWarning,
+  sanitizeText,
+  shouldBlockOperation,
+} from "../engine/safety.js";
 import { createTracker } from "../engine/tracker.js";
-import type { GitThatShitConfig, SnapshotType } from "../shared/types.js";
+import type { DetectionLevel, GitThatShitConfig, SnapshotResult, SnapshotType } from "../shared/types.js";
 
 /** Stable plugin id used by OpenCode for storage, status and diagnostics. */
 export const PLUGIN_ID = "gitdamnit.git-that-shit";
@@ -57,9 +64,11 @@ export const GitThatShitPlugin = Plugin.define({
   async setup(ctx) {
     const projectRoot = ctx.location?.directory || resolveProjectRoot();
     const controller = new AbortController();
+    const denials = new PendingDenials();
 
     let lastSessionId: string | undefined;
     let editTimer: ReturnType<typeof setTimeout> | undefined;
+    let permissionHookAvailable = false;
 
     console.log(`[git-that-shit] loaded v${getPackageVersion()} for ${projectRoot}`);
 
@@ -77,7 +86,7 @@ export const GitThatShitPlugin = Plugin.define({
       trigger: string,
       sessionId?: string,
       operation?: { tool?: string; preview?: string }
-    ) => {
+    ): Promise<SnapshotResult | undefined> => {
       try {
         const result = await snapshotEngine.snapshot({
           projectRoot,
@@ -94,8 +103,117 @@ export const GitThatShitPlugin = Plugin.define({
         return result;
       } catch (error) {
         // Never surface raw content in logs.
-        console.error(`[git-that-shit] snapshot failed (${type}): ${(error as Error).message}`);
+        console.error(
+          `[git-that-shit] snapshot failed (${type}): ${sanitizeText((error as Error).message)}`
+        );
+        return undefined;
       }
+    };
+
+    // --- Optional pre-execution blocking (strict mode) --------------------
+    // The OpenCode V2 SDK's `execute.before` tool hook returns void and cannot
+    // veto an operation. The only pre-execution gate the SDK exposes is
+    // `permission.evaluate`, whose evaluation carries a mutable `effect`
+    // ("allow" | "deny" | "ask") and the originating tool call in
+    // `evaluation.source.id`. Strict mode uses that gate and denies exactly the
+    // tool call whose protective snapshot failed.
+    //
+    // Ordering between `permission.evaluate` and `execute.before` is not
+    // specified by the SDK, so blocking is best-effort. When the hook is
+    // unavailable strict mode fails open and says so explicitly rather than
+    // claiming a guarantee it cannot provide. See docs/INTEROP.md.
+    try {
+      const permissionDomain = (ctx as { permission?: { hook?: (name: string, cb: (evaluation: any) => void) => Promise<unknown> } }).permission;
+      if (permissionDomain && typeof permissionDomain.hook === "function") {
+        await permissionDomain.hook("evaluate", (evaluation: any) => {
+          try {
+            const source = evaluation?.source;
+            const callId =
+              source && source.type === "tool" && source.id != null ? String(source.id) : undefined;
+            if (!callId) {
+              return;
+            }
+            const message = denials.get(callId);
+            if (message) {
+              evaluation.effect = "deny";
+              evaluation.message = message;
+            }
+          } catch (error) {
+            console.error(
+              `[git-that-shit] permission.evaluate failed: ${sanitizeText((error as Error).message)}`
+            );
+          }
+        });
+        permissionHookAvailable = true;
+      }
+    } catch (error) {
+      console.error(
+        `[git-that-shit] could not register permission.evaluate: ${sanitizeText((error as Error).message)}`
+      );
+    }
+
+    // Make the strict-mode contract explicit at startup rather than implying a
+    // guarantee the SDK does not provide.
+    if ((await getConfig()).snapshot.failureMode === "strict") {
+      if (permissionHookAvailable) {
+        console.warn(
+          "[git-that-shit] strict mode: destructive operations will be denied when a required " +
+            "protective snapshot fails. Blocking is best-effort (the SDK does not specify hook order)."
+        );
+      } else {
+        console.warn(
+          "[git-that-shit] strict mode requested, but this SDK build exposes no pre-execution " +
+            "permission gate; destructive operations will NOT be blocked. See docs/INTEROP.md."
+        );
+      }
+    }
+
+    /**
+     * Take a protective snapshot before a classified operation and act on the
+     * result according to the configured failure mode:
+     *  - standard: continue, warn clearly, never claim a snapshot exists;
+     *  - strict:   request a deny for this exact tool call; if the SDK cannot
+     *              block, warn and continue (fail open) instead of pretending.
+     */
+    const createProtectiveSnapshot = async (
+      type: SnapshotType,
+      reason: string,
+      trigger: string,
+      level: DetectionLevel,
+      callId: string | undefined,
+      operation?: { tool?: string; preview?: string }
+    ): Promise<{ verified: boolean; blocked: boolean }> => {
+      const cfg = await getConfig();
+      const result = await createSnapshot(type, reason, trigger, undefined, operation);
+      const verified = Boolean(result?.committed && result?.verified);
+
+      // A "no-changes" result means the working tree already matches the latest
+      // snapshot, so a recovery point exists even though no new commit was made.
+      // Treat it exactly like a verified snapshot, matching the restore path.
+      if (verified || result?.reason === "no-changes") {
+        return { verified, blocked: false };
+      }
+
+      const failure = result ?? { reason: "error" as const, error: "snapshot engine threw" };
+      const warning = formatSnapshotFailureWarning(failure, cfg.snapshot.failureMode);
+
+      if (shouldBlockOperation(level, cfg.snapshot.failureMode)) {
+        if (callId && permissionHookAvailable) {
+          denials.add(callId, formatBlockMessage(failure.reason, failure.error));
+          console.error(
+            `${warning} Blocking this ${level} operation (strict mode): tool call ${callId}.`
+          );
+          return { verified: false, blocked: true };
+        }
+        console.error(
+          `${warning} Strict mode requested blocking, but this SDK build exposes no pre-execution ` +
+            `gate; the operation was NOT blocked (documented limitation).`
+        );
+        return { verified: false, blocked: false };
+      }
+
+      console.warn(`${warning} Continuing (standard mode).`);
+      return { verified: false, blocked: false };
     };
 
     const schedulePostEdit = async (file: string) => {
@@ -143,6 +261,7 @@ export const GitThatShitPlugin = Plugin.define({
         }
 
         const tool = String(event.tool);
+        const callId = event.id != null ? String(event.id) : undefined;
         const cfg = await getConfig();
 
         if (SHELL_TOOLS.has(tool)) {
@@ -152,10 +271,14 @@ export const GitThatShitPlugin = Plugin.define({
           if (detection.shouldSnapshot) {
             const snapshotType: SnapshotType =
               detection.level === "risky" ? "pre-risky-op" : "pre-op";
-            await createSnapshot(snapshotType, detection.reason, "tool.execute.before", undefined, {
-              tool,
-              preview: detection.commandPreview,
-            });
+            await createProtectiveSnapshot(
+              snapshotType,
+              detection.reason,
+              "tool.execute.before",
+              detection.level,
+              callId,
+              { tool, preview: detection.commandPreview }
+            );
           }
         }
 
@@ -171,6 +294,10 @@ export const GitThatShitPlugin = Plugin.define({
     // writes, so relying on it alone would miss post-edit snapshots.
     await ctx.tool.hook("execute.after", async (event: any) => {
       await safe("execute.after", async () => {
+        // A pending strict-mode denial is scoped to a single tool call.
+        if (event.id != null) {
+          denials.forget(String(event.id));
+        }
         if (event.status !== "completed") {
           return;
         }
@@ -403,6 +530,7 @@ export const GitThatShitPlugin = Plugin.define({
     // Cleanup: abort the event subscription and cancel pending work.
     return () => {
       controller.abort();
+      denials.clear();
       if (editTimer) {
         clearTimeout(editTimer);
       }

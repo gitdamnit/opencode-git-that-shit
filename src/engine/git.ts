@@ -3,6 +3,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import { GitOperationError } from "../shared/errors.js";
 import { fileExists } from "../shared/paths.js";
+import { PRIVATE_FILE_MODE, hardenFile } from "../shared/permissions.js";
 import type { GitLogEntry } from "../shared/types.js";
 
 const DEFAULT_TIMEOUT = 30000;
@@ -74,8 +75,8 @@ export async function getGitVersion(): Promise<string | null> {
   }
 }
 
-export async function initRepo(repoPath: string): Promise<void> {
-  const result = await spawnGit(["init"], { cwd: repoPath });
+export async function initRepo(repoPath: string, timeout: number = DEFAULT_TIMEOUT): Promise<void> {
+  const result = await spawnGit(["init"], { cwd: repoPath, timeout });
   if (result.exitCode !== 0) {
     throw new GitOperationError(`Failed to init repo: ${result.stderr}`, "git init", result.exitCode);
   }
@@ -117,8 +118,8 @@ export async function getLocalConfig(repoPath: string, key: string): Promise<str
   }
 }
 
-export async function hasStagedChanges(repoPath: string): Promise<boolean> {
-  const result = await spawnGit(["diff", "--cached", "--quiet"], { cwd: repoPath });
+export async function hasStagedChanges(repoPath: string, timeout: number = DEFAULT_TIMEOUT): Promise<boolean> {
+  const result = await spawnGit(["diff", "--cached", "--quiet"], { cwd: repoPath, timeout });
   return result.exitCode === 1;
 }
 
@@ -127,21 +128,55 @@ export async function hasUnstagedChanges(repoPath: string): Promise<boolean> {
   return result.exitCode === 1;
 }
 
-export async function addAll(repoPath: string): Promise<void> {
-  const result = await spawnGit(["add", "-A"], { cwd: repoPath });
+export async function addAll(repoPath: string, timeout: number = DEFAULT_TIMEOUT): Promise<void> {
+  const result = await spawnGit(["add", "-A"], { cwd: repoPath, timeout });
   if (result.exitCode !== 0) {
     throw new GitOperationError(`Failed to stage files: ${result.stderr}`, "git add -A", result.exitCode);
   }
 }
 
-export async function commit(repoPath: string, message: string): Promise<string> {
-  const result = await spawnGit(["commit", "-m", message], { cwd: repoPath, captureStderr: false });
+export async function commit(
+  repoPath: string,
+  message: string,
+  timeout: number = DEFAULT_TIMEOUT
+): Promise<string> {
+  const result = await spawnGit(["commit", "-m", message], {
+    cwd: repoPath,
+    captureStderr: false,
+    timeout,
+  });
   if (result.exitCode !== 0) {
-    throw new GitOperationError(`Failed to commit: ${result.stderr}`, `git commit -m "${message}"`, result.exitCode);
+    // stderr is not captured for commit: it may echo tracked file names and, in
+    // pathological cases, content. The exit code alone identifies the failure.
+    throw new GitOperationError(
+      `Failed to commit (exit ${result.exitCode})`,
+      `git commit`,
+      result.exitCode
+    );
   }
 
-  const hashResult = await spawnGit(["rev-parse", "HEAD"], { cwd: repoPath });
+  const hashResult = await spawnGit(["rev-parse", "HEAD"], { cwd: repoPath, timeout });
   return hashResult.stdout;
+}
+
+/**
+ * Verify that `hash` resolves to a real commit object in the repository.
+ * Used so a snapshot is never reported as existing unless its creation is
+ * confirmed.
+ */
+export async function commitExists(
+  repoPath: string,
+  hash: string,
+  timeout: number = DEFAULT_TIMEOUT
+): Promise<boolean> {
+  if (!hash) {
+    return false;
+  }
+  const result = await spawnGit(["rev-parse", "--verify", "--quiet", `${hash}^{commit}`], {
+    cwd: repoPath,
+    timeout,
+  });
+  return result.exitCode === 0 && result.stdout.length > 0;
 }
 
 export async function log(repoPath: string, count: number = 50): Promise<GitLogEntry[]> {
@@ -269,7 +304,8 @@ export async function getCommitDate(repoPath: string, hash: string): Promise<str
 
 export async function writeGitignore(repoPath: string, content: string): Promise<void> {
   const gitignorePath = path.join(repoPath, ".gitignore");
-  await fs.writeFile(gitignorePath, content, "utf-8");
+  await fs.writeFile(gitignorePath, content, { encoding: "utf-8", mode: PRIVATE_FILE_MODE });
+  hardenFile(gitignorePath, PRIVATE_FILE_MODE);
 }
 
 export async function getTrackingFiles(repoPath: string): Promise<string[]> {

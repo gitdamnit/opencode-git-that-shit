@@ -1,6 +1,7 @@
 import * as fs from "fs/promises";
 import * as path from "path";
-import { getManifestPath, getShadowRepoPath, ensureDir } from "../shared/paths.js";
+import { getManifestPath, getShadowRepoPath } from "../shared/paths.js";
+import { PRIVATE_FILE_MODE, ensurePrivateDir, hardenFile } from "../shared/permissions.js";
 import type { ManifestEntry, SnapshotType } from "../shared/types.js";
 import * as git from "./git.js";
 
@@ -9,10 +10,11 @@ export async function appendManifestEntry(
   entry: ManifestEntry
 ): Promise<void> {
   const manifestPath = getManifestPath(projectRoot);
-  ensureDir(path.dirname(manifestPath));
+  ensurePrivateDir(path.dirname(manifestPath));
 
   const line = JSON.stringify(entry) + "\n";
-  await fs.appendFile(manifestPath, line, "utf-8");
+  await fs.appendFile(manifestPath, line, { encoding: "utf-8", mode: PRIVATE_FILE_MODE });
+  hardenFile(manifestPath, PRIVATE_FILE_MODE);
 }
 
 /** Atomically replace the entire manifest. */
@@ -21,12 +23,17 @@ export async function writeManifest(
   entries: ManifestEntry[]
 ): Promise<void> {
   const manifestPath = getManifestPath(projectRoot);
-  ensureDir(path.dirname(manifestPath));
+  ensurePrivateDir(path.dirname(manifestPath));
 
   const tmpPath = `${manifestPath}.tmp-${process.pid}`;
   const body = entries.map((e) => JSON.stringify(e)).join("\n");
-  await fs.writeFile(tmpPath, body ? body + "\n" : "", "utf-8");
+  await fs.writeFile(tmpPath, body ? body + "\n" : "", {
+    encoding: "utf-8",
+    mode: PRIVATE_FILE_MODE,
+  });
+  hardenFile(tmpPath, PRIVATE_FILE_MODE);
   await fs.rename(tmpPath, manifestPath);
+  hardenFile(manifestPath, PRIVATE_FILE_MODE);
 }
 
 export async function readManifest(
