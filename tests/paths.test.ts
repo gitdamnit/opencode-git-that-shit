@@ -67,8 +67,21 @@ describe("paths", () => {
 
   it("getGlobalConfigPath returns path in home dir", async () => {
     const { getGlobalConfigPath } = await import(MODULE_PATH);
-    const home = require("os").homedir();
-    expect(getGlobalConfigPath()).toBe(path.join(home, ".config", "opencode", "config.json"));
+    // Be robust to another test file having set an isolation override: this
+    // assertion is specifically about the *default* path.
+    const savedOverride = process.env.GIT_THAT_SHIT_GLOBAL_CONFIG_DIR;
+    const savedXdg = process.env.XDG_CONFIG_HOME;
+    delete process.env.GIT_THAT_SHIT_GLOBAL_CONFIG_DIR;
+    delete process.env.XDG_CONFIG_HOME;
+    try {
+      const home = require("os").homedir();
+      expect(getGlobalConfigPath()).toBe(path.join(home, ".config", "opencode", "config.json"));
+    } finally {
+      if (savedOverride === undefined) delete process.env.GIT_THAT_SHIT_GLOBAL_CONFIG_DIR;
+      else process.env.GIT_THAT_SHIT_GLOBAL_CONFIG_DIR = savedOverride;
+      if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = savedXdg;
+    }
   });
 
   it("ensureDir creates directory", async () => {

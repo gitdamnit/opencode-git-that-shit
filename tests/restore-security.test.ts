@@ -1,9 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, afterAll } from "bun:test";
 import * as path from "path";
 import * as fs from "fs";
 import { spawnSync } from "child_process";
 
+const GLOBAL_CONFIG_ENV_PREV = process.env.GIT_THAT_SHIT_GLOBAL_CONFIG_DIR;
 process.env.GIT_THAT_SHIT_GLOBAL_CONFIG_DIR = path.join("/tmp", "gts-no-global-restore-sec");
+// Restore the environment so this file never leaks isolation into another test file.
+afterAll(() => {
+  if (GLOBAL_CONFIG_ENV_PREV === undefined) delete process.env.GIT_THAT_SHIT_GLOBAL_CONFIG_DIR;
+  else process.env.GIT_THAT_SHIT_GLOBAL_CONFIG_DIR = GLOBAL_CONFIG_ENV_PREV;
+});
 
 const configModule = async () => import("../src/engine/config.js");
 

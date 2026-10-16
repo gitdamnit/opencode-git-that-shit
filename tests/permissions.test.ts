@@ -1,10 +1,16 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, afterAll } from "bun:test";
 import * as path from "path";
 import * as fs from "fs";
 import { spawnSync } from "child_process";
 
 // Hermetic: never read the developer's real global OpenCode config.
+const GLOBAL_CONFIG_ENV_PREV = process.env.GIT_THAT_SHIT_GLOBAL_CONFIG_DIR;
 process.env.GIT_THAT_SHIT_GLOBAL_CONFIG_DIR = path.join("/tmp", "gts-no-global-perms");
+// Restore the environment so this file never leaks isolation into another test file.
+afterAll(() => {
+  if (GLOBAL_CONFIG_ENV_PREV === undefined) delete process.env.GIT_THAT_SHIT_GLOBAL_CONFIG_DIR;
+  else process.env.GIT_THAT_SHIT_GLOBAL_CONFIG_DIR = GLOBAL_CONFIG_ENV_PREV;
+});
 
 const posix = process.platform !== "win32";
 const mode = (p: string): number => fs.statSync(p).mode & 0o777;

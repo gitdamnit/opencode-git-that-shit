@@ -1,8 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, afterAll } from "bun:test";
 import * as path from "path";
 import * as fs from "fs";
 
+const GLOBAL_CONFIG_ENV_PREV = process.env.GIT_THAT_SHIT_GLOBAL_CONFIG_DIR;
 process.env.GIT_THAT_SHIT_GLOBAL_CONFIG_DIR = path.join("/tmp", "gts-no-global-strict");
+// Restore the environment so this file never leaks isolation into another test file.
+afterAll(() => {
+  if (GLOBAL_CONFIG_ENV_PREV === undefined) delete process.env.GIT_THAT_SHIT_GLOBAL_CONFIG_DIR;
+  else process.env.GIT_THAT_SHIT_GLOBAL_CONFIG_DIR = GLOBAL_CONFIG_ENV_PREV;
+});
 
 const DIST_INDEX = path.join(import.meta.dir, "..", "dist", "index.js");
 
