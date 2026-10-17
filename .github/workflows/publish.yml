@@ -1,14 +1,13 @@
+# Manual release publishing using npm Trusted Publishing (OIDC).
+# Never triggered by a GitHub release or tag push.
 name: Publish to npm
 
-# Publication is deliberately manual. Creating or publishing a GitHub release
-# must never publish to npm automatically, so this workflow only runs when a
-# maintainer dispatches it by hand for an authorised release.
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag being published (informational only)"
-        required: false
+        description: "Existing release tag (for example v0.3.0)"
+        required: true
         type: string
 
 permissions:
@@ -18,33 +17,56 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
+      - name: Validate input and checkout tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -eu
+          if ! printf '%s' "$RELEASE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Expected a stable release tag such as v1.2.3" >&2
+            exit 1
+          fi
+      - name: Checkout release tag
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
 
-      - name: Setup Node
+      - name: Set up Node for npm Trusted Publishing
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '24'
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
-      - name: Setup Bun
+      - name: Require current npm OIDC client
+        run: npm install --global 'npm@^11.5.1'
+
+      - name: Verify version and tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -eu
+          actual="$(node -p "require('./package.json').version")"
+          test "$RELEASE_TAG" = "v$actual" || {
+            echo "Version mismatch: $RELEASE_TAG vs $actual" >&2
+            exit 1
+          }
+          echo "Verified release $RELEASE_TAG"
+
+      - name: Install dependencies
+        run: npm ci
+      - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Typecheck, build and test
+        run: |
+          npm run typecheck
+          npm run build
+          npm test
 
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Build
-        run: npm run build
-
-      - name: Test
-        run: npm test
-
-      - name: Publish
+      - name: Publish using OIDC
         run: npm publish --access public
