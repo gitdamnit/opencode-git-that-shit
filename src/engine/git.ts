@@ -3,6 +3,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import { GitOperationError } from "../shared/errors.js";
 import { fileExists } from "../shared/paths.js";
+import { PRIVATE_FILE_MODE, hardenFile } from "../shared/permissions.js";
 import type { GitLogEntry } from "../shared/types.js";
 
 const DEFAULT_TIMEOUT = 30000;
@@ -13,14 +14,16 @@ async function spawnGit(
     cwd?: string;
     timeout?: number;
     captureStderr?: boolean;
+    env?: Record<string, string>;
   } = {}
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const { cwd = process.cwd(), timeout = DEFAULT_TIMEOUT, captureStderr = true } = options;
+  const { cwd = process.cwd(), timeout = DEFAULT_TIMEOUT, captureStderr = true, env } = options;
 
   return new Promise((resolve) => {
     const proc = spawn("git", args, {
       cwd,
       stdio: captureStderr ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "ignore"],
+      env: env ? { ...process.env, ...env } : process.env,
     });
 
     let stdout = "";
@@ -72,8 +75,8 @@ export async function getGitVersion(): Promise<string | null> {
   }
 }
 
-export async function initRepo(repoPath: string): Promise<void> {
-  const result = await spawnGit(["init"], { cwd: repoPath });
+export async function initRepo(repoPath: string, timeout: number = DEFAULT_TIMEOUT): Promise<void> {
+  const result = await spawnGit(["init"], { cwd: repoPath, timeout });
   if (result.exitCode !== 0) {
     throw new GitOperationError(`Failed to init repo: ${result.stderr}`, "git init", result.exitCode);
   }
@@ -115,8 +118,8 @@ export async function getLocalConfig(repoPath: string, key: string): Promise<str
   }
 }
 
-export async function hasStagedChanges(repoPath: string): Promise<boolean> {
-  const result = await spawnGit(["diff", "--cached", "--quiet"], { cwd: repoPath });
+export async function hasStagedChanges(repoPath: string, timeout: number = DEFAULT_TIMEOUT): Promise<boolean> {
+  const result = await spawnGit(["diff", "--cached", "--quiet"], { cwd: repoPath, timeout });
   return result.exitCode === 1;
 }
 
@@ -125,21 +128,55 @@ export async function hasUnstagedChanges(repoPath: string): Promise<boolean> {
   return result.exitCode === 1;
 }
 
-export async function addAll(repoPath: string): Promise<void> {
-  const result = await spawnGit(["add", "-A"], { cwd: repoPath });
+export async function addAll(repoPath: string, timeout: number = DEFAULT_TIMEOUT): Promise<void> {
+  const result = await spawnGit(["add", "-A"], { cwd: repoPath, timeout });
   if (result.exitCode !== 0) {
     throw new GitOperationError(`Failed to stage files: ${result.stderr}`, "git add -A", result.exitCode);
   }
 }
 
-export async function commit(repoPath: string, message: string): Promise<string> {
-  const result = await spawnGit(["commit", "-m", message], { cwd: repoPath, captureStderr: false });
+export async function commit(
+  repoPath: string,
+  message: string,
+  timeout: number = DEFAULT_TIMEOUT
+): Promise<string> {
+  const result = await spawnGit(["commit", "-m", message], {
+    cwd: repoPath,
+    captureStderr: false,
+    timeout,
+  });
   if (result.exitCode !== 0) {
-    throw new GitOperationError(`Failed to commit: ${result.stderr}`, `git commit -m "${message}"`, result.exitCode);
+    // stderr is not captured for commit: it may echo tracked file names and, in
+    // pathological cases, content. The exit code alone identifies the failure.
+    throw new GitOperationError(
+      `Failed to commit (exit ${result.exitCode})`,
+      `git commit`,
+      result.exitCode
+    );
   }
 
-  const hashResult = await spawnGit(["rev-parse", "HEAD"], { cwd: repoPath });
+  const hashResult = await spawnGit(["rev-parse", "HEAD"], { cwd: repoPath, timeout });
   return hashResult.stdout;
+}
+
+/**
+ * Verify that `hash` resolves to a real commit object in the repository.
+ * Used so a snapshot is never reported as existing unless its creation is
+ * confirmed.
+ */
+export async function commitExists(
+  repoPath: string,
+  hash: string,
+  timeout: number = DEFAULT_TIMEOUT
+): Promise<boolean> {
+  if (!hash) {
+    return false;
+  }
+  const result = await spawnGit(["rev-parse", "--verify", "--quiet", `${hash}^{commit}`], {
+    cwd: repoPath,
+    timeout,
+  });
+  return result.exitCode === 0 && result.stdout.length > 0;
 }
 
 export async function log(repoPath: string, count: number = 50): Promise<GitLogEntry[]> {
@@ -267,7 +304,8 @@ export async function getCommitDate(repoPath: string, hash: string): Promise<str
 
 export async function writeGitignore(repoPath: string, content: string): Promise<void> {
   const gitignorePath = path.join(repoPath, ".gitignore");
-  await fs.writeFile(gitignorePath, content, "utf-8");
+  await fs.writeFile(gitignorePath, content, { encoding: "utf-8", mode: PRIVATE_FILE_MODE });
+  hardenFile(gitignorePath, PRIVATE_FILE_MODE);
 }
 
 export async function getTrackingFiles(repoPath: string): Promise<string[]> {
@@ -276,4 +314,108 @@ export async function getTrackingFiles(repoPath: string): Promise<string[]> {
     return [];
   }
   return result.stdout.split("\n").filter((f) => f);
+}
+
+/** All commit hashes, oldest first. */
+export async function revListReverse(repoPath: string): Promise<string[]> {
+  const result = await spawnGit(["rev-list", "--reverse", "HEAD"], { cwd: repoPath });
+  if (result.exitCode !== 0) {
+    return [];
+  }
+  return result.stdout.split("\n").filter((f) => f);
+}
+
+export interface CommitMeta {
+  tree: string;
+  message: string;
+  authorName: string;
+  authorEmail: string;
+  authorDate: string;
+  committerName: string;
+  committerEmail: string;
+  committerDate: string;
+}
+
+export async function getCommitMeta(repoPath: string, hash: string): Promise<CommitMeta | null> {
+  const format = "%T%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%B";
+  const result = await spawnGit(["show", "-s", `--format=${format}`, hash], { cwd: repoPath });
+  if (result.exitCode !== 0) {
+    return null;
+  }
+  const parts = result.stdout.split("\u0000");
+  if (parts.length < 8) {
+    return null;
+  }
+  return {
+    tree: parts[0].trim(),
+    authorName: parts[1],
+    authorEmail: parts[2],
+    authorDate: parts[3],
+    committerName: parts[4],
+    committerEmail: parts[5],
+    committerDate: parts[6],
+    message: parts.slice(7).join("\u0000").trim(),
+  };
+}
+
+export async function commitTree(
+  repoPath: string,
+  tree: string,
+  parent: string | null,
+  meta: CommitMeta
+): Promise<string> {
+  const args = ["commit-tree", tree];
+  if (parent) {
+    args.push("-p", parent);
+  }
+  args.push("-m", meta.message);
+
+  const result = await spawnGit(args, {
+    cwd: repoPath,
+    env: {
+      GIT_AUTHOR_NAME: meta.authorName,
+      GIT_AUTHOR_EMAIL: meta.authorEmail,
+      GIT_AUTHOR_DATE: meta.authorDate,
+      GIT_COMMITTER_NAME: meta.committerName,
+      GIT_COMMITTER_EMAIL: meta.committerEmail,
+      GIT_COMMITTER_DATE: meta.committerDate,
+    },
+  });
+
+  if (result.exitCode !== 0) {
+    throw new GitOperationError(`Failed to create commit: ${result.stderr}`, "git commit-tree", result.exitCode);
+  }
+  return result.stdout.trim();
+}
+
+/** Move `refPath` from `expectedOld` to `newHash` atomically (compare-and-swap). */
+export async function updateRef(
+  repoPath: string,
+  refPath: string,
+  newHash: string,
+  expectedOld?: string
+): Promise<boolean> {
+  const args = ["update-ref", refPath, newHash];
+  if (expectedOld) {
+    args.push(expectedOld);
+  }
+  const result = await spawnGit(args, { cwd: repoPath });
+  return result.exitCode === 0;
+}
+
+export async function resetHard(repoPath: string, hash: string): Promise<void> {
+  const result = await spawnGit(["reset", "--hard", hash], { cwd: repoPath });
+  if (result.exitCode !== 0) {
+    throw new GitOperationError(`Failed to reset: ${result.stderr}`, "git reset --hard", result.exitCode);
+  }
+}
+
+/** The branch HEAD currently points at, or "master" on an unborn branch. */
+export async function getHeadRef(repoPath: string): Promise<string> {
+  const result = await spawnGit(["symbolic-ref", "--short", "HEAD"], { cwd: repoPath });
+  if (result.exitCode === 0 && result.stdout) {
+    return result.stdout;
+  }
+  const branch = await getCurrentBranch(repoPath);
+  return branch || "master";
 }

@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { getPackageVersion } from "../shared/version.js";
+
 const main = async () => {
   const args = process.argv.slice(2);
   const cmd = args[0];
@@ -25,8 +27,8 @@ Commands:
     return;
   }
 
-  if (cmd === "version" || cmd === "-v") {
-    console.log("Git That Shit version 0.1.0");
+  if (cmd === "version" || cmd === "-v" || cmd === "--version") {
+    console.log(`Git That Shit version ${getPackageVersion()}`);
     return;
   }
 

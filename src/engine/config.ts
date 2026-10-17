@@ -1,6 +1,7 @@
 import * as fs from "fs/promises";
 import * as path from "path";
-import { getConfigPath, ensureDir } from "../shared/paths.js";
+import { getConfigPath } from "../shared/paths.js";
+import { writePrivateFile, hardenFile } from "../shared/permissions.js";
 import type { GitThatShitConfig } from "../shared/types.js";
 import { ConfigError } from "../shared/errors.js";
 
@@ -9,6 +10,7 @@ export const DEFAULT_CONFIG: GitThatShitConfig = {
   tracking: {
     include: [
       "opencode.json",
+      "opencode.jsonc",
       ".opencode/state/checkpoint.json",
       ".opencode/state/handoff.md",
       ".opencode/state/checkpoint-history.json",
@@ -69,6 +71,8 @@ export const DEFAULT_CONFIG: GitThatShitConfig = {
   snapshot: {
     maxFileSizeMb: 10,
     minDiskSpaceMb: 100,
+    gitTimeoutMs: 30000,
+    failureMode: "standard",
   },
   restore: {
     autoPreRestoreSnapshot: true,
@@ -110,8 +114,10 @@ export async function loadConfig(projectRoot: string): Promise<GitThatShitConfig
 
 export async function saveConfig(projectRoot: string, config: GitThatShitConfig): Promise<void> {
   const configPath = getConfigPath(projectRoot);
-  ensureDir(path.dirname(configPath));
-  await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
+  // The configuration names secret keys and points at private storage; keep it
+  // owner-only.
+  await writePrivateFile(configPath, JSON.stringify(config, null, 2));
+  hardenFile(configPath);
 }
 
 export async function resetConfig(projectRoot: string): Promise<void> {
@@ -151,11 +157,32 @@ function mergeConfig(defaultConfig: GitThatShitConfig, userConfig: Partial<GitTh
     snapshot: {
       maxFileSizeMb: userConfig.snapshot?.maxFileSizeMb ?? defaultConfig.snapshot.maxFileSizeMb,
       minDiskSpaceMb: userConfig.snapshot?.minDiskSpaceMb ?? defaultConfig.snapshot.minDiskSpaceMb,
+      gitTimeoutMs: normalizeGitTimeout(userConfig.snapshot?.gitTimeoutMs, defaultConfig.snapshot.gitTimeoutMs),
+      failureMode: normalizeFailureMode(userConfig.snapshot?.failureMode, defaultConfig.snapshot.failureMode),
     },
     restore: {
       autoPreRestoreSnapshot: userConfig.restore?.autoPreRestoreSnapshot ?? defaultConfig.restore.autoPreRestoreSnapshot,
     },
   };
+}
+
+const FAILURE_MODES = ["standard", "strict"] as const;
+export type SnapshotFailureMode = (typeof FAILURE_MODES)[number];
+
+export function normalizeFailureMode(
+  value: unknown,
+  fallback: SnapshotFailureMode = "standard"
+): SnapshotFailureMode {
+  return typeof value === "string" && (FAILURE_MODES as readonly string[]).includes(value)
+    ? (value as SnapshotFailureMode)
+    : fallback;
+}
+
+export function normalizeGitTimeout(value: unknown, fallback: number = 30000): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return fallback;
+  }
+  return Math.floor(value);
 }
 
 export function getHardExcludes(): string[] {
@@ -170,7 +197,10 @@ export function getHardExcludes(): string[] {
     "*.gguf",
     "*.bin",
     "*.sqlite",
+    "*.sqlite3",
     "*.db",
+    "*.db-wal",
+    "*.db-shm",
     ".env",
     "*.pem",
     "*.key",

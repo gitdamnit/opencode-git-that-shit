@@ -1,0 +1,6 @@
+[test]
+# Slow CI runners occasionally exceed Bun's 5s default for tests that spawn
+# node/git subprocesses (CLI snapshots, packaging, first-time module import).
+# Raising the suite-wide default keeps CI deterministic without weakening any
+# assertion; individual tests may still set a tighter bound.
+timeout = 30000

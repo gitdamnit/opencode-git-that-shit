@@ -15,13 +15,20 @@ export class Tracker {
   private includePatterns: RegExp[];
   private excludePatterns: RegExp[];
   private secretPatterns: RegExp[];
+  private secretKeys: string[];
 
   constructor(config: GitThatShitConfig) {
     this.config = config;
     this.hardExcludes = getHardExcludes().map((p) => this.globToRegex(p));
     this.includePatterns = config.tracking.include.map((p) => this.globToRegex(p));
     this.excludePatterns = config.tracking.exclude.map((p) => this.globToRegex(p));
+    this.secretKeys = config.secrets.redactKeys;
     this.secretPatterns = config.secrets.redactKeys.map((k) => new RegExp(`(^|[^a-zA-Z])${k}([^a-zA-Z]|$)`, "i"));
+  }
+
+  /** The configured secret key names, for text-based redaction. */
+  getSecretKeys(): string[] {
+    return this.secretKeys;
   }
 
   private globToRegex(glob: string): RegExp {
@@ -82,9 +89,27 @@ export class Tracker {
     return false;
   }
 
+  /**
+   * A relative path is safe only when it stays inside the project root: it must
+   * be relative and must not contain a `..` segment. This blocks path traversal
+   * attempts such as `../../../etc/passwd.json`.
+   */
+  isSafeRelativePath(filePath: string): boolean {
+    if (!filePath || path.isAbsolute(filePath)) {
+      return false;
+    }
+    const normalized = filePath.replace(/\\/g, "/");
+    const segments = normalized.split("/");
+    return !segments.includes("..");
+  }
+
   shouldTrack(filePath: string): { track: boolean; reason?: string } {
     const normalizedPath = filePath.replace(/\\/g, "/");
     const filename = path.basename(normalizedPath);
+
+    if (!this.isSafeRelativePath(filePath)) {
+      return { track: false, reason: "unsafe path (traversal or absolute)" };
+    }
 
     if (this.isHardExcluded(normalizedPath)) {
       return { track: false, reason: "hard excluded" };

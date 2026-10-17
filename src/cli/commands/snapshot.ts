@@ -29,6 +29,9 @@ export default async function snapshotCommand(args: string[]): Promise<void> {
 
   if (!result.committed) {
     console.log(`Snapshot ${result.reason}`);
+    if (result.reason === "no-changes") {
+      return;
+    }
     if (result.error) {
       console.error(`Error: ${result.error}`);
     }

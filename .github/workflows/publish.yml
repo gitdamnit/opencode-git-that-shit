@@ -1,9 +1,15 @@
 name: Publish to npm
 
+# Publication is deliberately manual. Creating or publishing a GitHub release
+# must never publish to npm automatically, so this workflow only runs when a
+# maintainer dispatches it by hand for an authorised release.
 on:
-  push:
-    tags:
-      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag being published (informational only)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -11,40 +17,34 @@ permissions:
 
 jobs:
   publish:
-    name: Publish package
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
-      - name: Setup Node for npm publishing
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org/
-
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: npm ci
 
       - name: Typecheck
-        run: bun run typecheck --if-present
-
-      - name: Lint
-        run: bun run lint --if-present
-
-      - name: Test
-        run: bun test
+        run: npm run typecheck
 
       - name: Build
-        run: bun run build --if-present
+        run: npm run build
 
-      - name: Publish to npm
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Test
+        run: npm test
+
+      - name: Publish
+        run: npm publish --access public

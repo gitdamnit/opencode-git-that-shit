@@ -25,7 +25,6 @@ export default async function initCommand(args: string[]): Promise<void> {
   try {
     await snapshot.initShadowRepo(projectRoot);
 
-    const shadowPath = projectRoot + "/.git-that-shit/git-that-shit/snapshots";
     console.log(`Shadow repo initialized at: ${shadowPath}`);
 
     console.log("Creating initial snapshot...");

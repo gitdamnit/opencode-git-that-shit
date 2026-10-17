@@ -1,4 +1,5 @@
 import * as path from "path";
+import * as fs from "node:fs";
 import * as git from "./git.js";
 import * as manifest from "./manifest.js";
 import * as lock from "./lock.js";
@@ -12,6 +13,7 @@ import {
   fileExists,
 } from "../shared/paths.js";
 import type { DoctorCheck, DoctorReport } from "../shared/types.js";
+import { POSIX_SUPPORTED, getPrivateStateDirs } from "../shared/permissions.js";
 
 export async function runDoctor(projectRoot: string): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [];
@@ -34,6 +36,7 @@ export async function runDoctor(projectRoot: string): Promise<DoctorReport> {
   checks.push(checkEnvExample(projectRoot));
   checks.push(checkEnvExcluded(projectRoot));
   checks.push(await checkProjectGitUntouched(projectRoot));
+  checks.push(checkStoragePermissions(projectRoot));
 
   const hasFail = checks.some((c) => c.status === "fail");
   const hasWarn = checks.some((c) => c.status === "warn");
@@ -284,6 +287,40 @@ function checkEnvExcluded(projectRoot: string): DoctorCheck {
       ? ".env is excluded by default"
       : "No .env file found",
   };
+}
+
+function checkStoragePermissions(projectRoot: string): DoctorCheck {
+  if (!POSIX_SUPPORTED) {
+    return {
+      name: "storage-permissions",
+      status: "skipped",
+      message: "POSIX permissions are not applicable on this platform",
+    };
+  }
+
+  const tooOpen: string[] = [];
+  for (const dir of getPrivateStateDirs(projectRoot)) {
+    try {
+      const stat = fs.statSync(dir);
+      if ((stat.mode & 0o077) !== 0) {
+        tooOpen.push(path.relative(projectRoot, dir) || dir);
+      }
+    } catch {
+      // Directory not created yet; nothing to check.
+    }
+  }
+
+  return tooOpen.length === 0
+    ? {
+        name: "storage-permissions",
+        status: "ok",
+        message: "Git That Shit storage is owner-only (0700)",
+      }
+    : {
+        name: "storage-permissions",
+        status: "warn",
+        message: `Group/other-accessible storage: ${tooOpen.join(", ")}`,
+      };
 }
 
 async function checkProjectGitUntouched(projectRoot: string): Promise<DoctorCheck> {

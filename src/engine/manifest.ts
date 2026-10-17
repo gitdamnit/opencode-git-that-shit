@@ -1,6 +1,7 @@
 import * as fs from "fs/promises";
 import * as path from "path";
-import { getManifestPath, ensureDir } from "../shared/paths.js";
+import { getManifestPath, getShadowRepoPath } from "../shared/paths.js";
+import { PRIVATE_FILE_MODE, ensurePrivateDir, hardenFile } from "../shared/permissions.js";
 import type { ManifestEntry, SnapshotType } from "../shared/types.js";
 import * as git from "./git.js";
 
@@ -9,10 +10,30 @@ export async function appendManifestEntry(
   entry: ManifestEntry
 ): Promise<void> {
   const manifestPath = getManifestPath(projectRoot);
-  ensureDir(path.dirname(manifestPath));
+  ensurePrivateDir(path.dirname(manifestPath));
 
   const line = JSON.stringify(entry) + "\n";
-  await fs.appendFile(manifestPath, line, "utf-8");
+  await fs.appendFile(manifestPath, line, { encoding: "utf-8", mode: PRIVATE_FILE_MODE });
+  hardenFile(manifestPath, PRIVATE_FILE_MODE);
+}
+
+/** Atomically replace the entire manifest. */
+export async function writeManifest(
+  projectRoot: string,
+  entries: ManifestEntry[]
+): Promise<void> {
+  const manifestPath = getManifestPath(projectRoot);
+  ensurePrivateDir(path.dirname(manifestPath));
+
+  const tmpPath = `${manifestPath}.tmp-${process.pid}`;
+  const body = entries.map((e) => JSON.stringify(e)).join("\n");
+  await fs.writeFile(tmpPath, body ? body + "\n" : "", {
+    encoding: "utf-8",
+    mode: PRIVATE_FILE_MODE,
+  });
+  hardenFile(tmpPath, PRIVATE_FILE_MODE);
+  await fs.rename(tmpPath, manifestPath);
+  hardenFile(manifestPath, PRIVATE_FILE_MODE);
 }
 
 export async function readManifest(
@@ -53,25 +74,21 @@ export async function readManifest(
 export async function rebuildManifestFromGit(
   projectRoot: string
 ): Promise<ManifestEntry[]> {
-  const shadowRepoPath = path.join(
-    projectRoot,
-    ".git-that-shit",
-    "git-that-shit",
-    "snapshots"
-  );
+  const shadowRepoPath = getShadowRepoPath(projectRoot);
 
   try {
     const logs = await git.log(shadowRepoPath, 100);
     const entries: ManifestEntry[] = [];
 
     for (const log of logs) {
-      const entry = parseCommitMessageToManifestEntry(log.message, log.hash);
+      const entry = parseCommitMessageToManifestEntry(log.message, log.hash, log.timestamp);
       if (entry) {
         entries.push(entry);
       }
     }
 
-    return entries;
+    // git.log returns newest first; the manifest is oldest first.
+    return entries.reverse();
   } catch {
     return [];
   }
@@ -79,7 +96,8 @@ export async function rebuildManifestFromGit(
 
 function parseCommitMessageToManifestEntry(
   message: string,
-  hash: string
+  hash: string,
+  timestampSeconds?: number
 ): ManifestEntry | null {
   const shortHash = hash.slice(0, 7);
 
@@ -94,17 +112,25 @@ function parseCommitMessageToManifestEntry(
     { regex: /^pre-restore:/, type: "pre-restore" },
   ];
 
+  const iso = timestampSeconds
+    ? new Date(timestampSeconds * 1000).toISOString()
+    : new Date().toISOString();
+
+  const sessionMatch = message.match(/^Session:\s*(.+)$/m);
+  const triggerMatch = message.match(/^Triggered by:\s*(.+)$/m);
+
   for (const { regex, type } of patterns) {
     if (regex.test(message)) {
-      const reason = message.replace(regex, "").trim();
+      const reason = message.replace(regex, "").split("\n")[0].trim();
 
       return {
         hash,
         shortHash,
-        timestamp: new Date().toISOString(),
+        timestamp: iso,
         type,
-        trigger: "rebuilt from git",
+        trigger: triggerMatch ? triggerMatch[1].trim() : "rebuilt from git",
         reason,
+        sessionId: sessionMatch ? sessionMatch[1].trim() : undefined,
         filesCopied: [],
         filesSkipped: [],
         filesRedacted: [],
