@@ -72,3 +72,19 @@ restores, and the three plugins both alone and combined.
 - Strict-mode pre-execution blocking is best-effort, not guaranteed (see
   `docs/INTEROP.md`).
 - No live model-provider credentials were used (`--online` disabled).
+
+## 5. Release publication (post-merge)
+
+Recorded after the PR merged, so the release outcome is durable in the repository.
+
+| Item | Value |
+| --- | --- |
+| PR #1 | merged into `master` at 2026-10-17T00:34:14Z |
+| Merge commit (released commit) | `c752e58b9385ee57a68e89ccf059ea7766e5746c` |
+| Verified commit ancestry | `6069f916a0fac14439c3335e682f994466961851` is an ancestor of the merge commit |
+| Merge-method CI | green on `c752e58` (`https://github.com/gitdamnit/opencode-git-that-shit/actions/runs/38986980930`) |
+| Annotated tag | `v0.3.0` → tag object `494bc1c21550f4e235300c600492bce4872079ea`, peels to `c752e58` |
+| GitHub release | `https://github.com/gitdamnit/opencode-git-that-shit/releases/tag/v0.3.0` (not draft, not prerelease) |
+| Released source archive | `v0.3.0.tar.gz`, sha256 `62f2429babd075f543ddd7b00033fa0a34ffb61f05a2a36769f214d2a45a9cb1` |
+| Fresh build from that archive | `npm ci` + `npm run build` succeed; `bun test` 322 passed / 0 failed; `gts version` → `0.3.0`; entry-point id `gitdamnit.git-that-shit` |
+| npm publication | **not performed** (manual `workflow_dispatch` only); npm `latest` remains `0.2.2` |

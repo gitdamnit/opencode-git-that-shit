@@ -2,25 +2,28 @@
 
 ## Current Phase
 
-In Progress
+Released
 
 ## Repository State
 
 <!-- Machine-maintained by `prodoc update`. Do not hand-edit. -->
 <!-- prodoc:observed:start -->
 <!-- Observed from Git metadata only, by `prodoc update`. This block is not evidence that the implementation or its tests are correct; record that under `## Verification Evidence`. -->
-- **Observed branch:** feat/git-that-shit-v2-hardening
-- **Observed commit:** 6069f916a0fac14439c3335e682f994466961851
+- **Observed branch:** detached-head
+- **Observed commit:** c752e58b9385ee57a68e89ccf059ea7766e5746c
 - **Observed working tree:** dirty
-- **Observed at:** 2026-10-17T00:32:38Z
+- **Observed at:** 2026-10-17T00:37:00Z
 <!-- prodoc:observed:end -->
 
 ## Verification Evidence
 
 - **Verification:** commit `6069f91` — repository suite green, 322 tests / 24 files, 0 failures (`bun test`); typecheck, lint and build pass — evidence `docs/RELEASE-0.3.0-EVIDENCE.md`
-- **Verification:** commit `6069f91` — `npm pack` yields 70 files (`dist/`, `LICENSE`, `NOTICE`, `package.json`, `README.md`); packed artifact installs isolated, reports `0.3.0`, imports entry point `gitdamnit.git-that-shit` and runs `gts version` — evidence `docs/RELEASE-0.3.0-EVIDENCE.md`
+- **Verification:** commit `6069f91` — `npm pack` yields 70 files: `LICENSE`, `NOTICE`, `package.json`, `README.md` plus the built dist tree; packed artifact installs isolated, reports `0.3.0`, imports entry point `gitdamnit.git-that-shit` and runs `gts version` — evidence `docs/RELEASE-0.3.0-EVIDENCE.md`
 - **Verification:** commit `6069f91` — Docker Plugin Test Lab image `sha256:76ebd805cd548a638b9b1508e5f16e680cd5b082cd3f3561d28f2f2301336ff1` (OpenCode 2.0.21, Node 22.23.3): 145 passed / 0 failed / 0 skipped — evidence `docs/RELEASE-0.3.0-EVIDENCE.md`
 - **Verification:** commit `6069f91` — source/staged/packed/installed versions all `0.3.0` and consistent across the three plugins — evidence `docs/RELEASE-0.3.0-EVIDENCE.md`
+- **Verification:** commit `c752e58` — PR #1 merged into `master` (merge commit `c752e58`, verified ancestor `6069f91` retained); CI green on `c752e58` — evidence `https://github.com/gitdamnit/opencode-git-that-shit/actions/runs/38986980930`
+- **Verification:** commit `c752e58` — released source archive `v0.3.0.tar.gz` (sha256 `62f2429babd075f543ddd7b00033fa0a34ffb61f05a2a36769f214d2a45a9cb1`) builds and runs 322/0 tests; `gts version` → `0.3.0`; entry point id `gitdamnit.git-that-shit` — evidence `docs/RELEASE-0.3.0-EVIDENCE.md`
+- **Verification:** tag `v0.3.0` (annotated, `494bc1c` → `c752e58`) and GitHub release published — evidence `https://github.com/gitdamnit/opencode-git-that-shit/releases/tag/v0.3.0`
 
 ## Completed Work
 
@@ -33,6 +36,9 @@ In Progress
 - [Implemented] Add Apache-2.0 `LICENSE` at the repository root — `LICENSE`
 - [Implemented] Gate npm publishing to explicit `workflow_dispatch` — `.github/workflows/publish.yml`
 - [Implemented] Canonical project documentation — `PRODUCT_REQUIREMENTS.md`, `DECISION_LOG.md`, `PROJECT_STATUS.md`
+- [Deployed] PR #1 merged into `master` with a merge commit preserving the verified commit — `c752e58`
+- [Deployed] GitHub release `v0.3.0` (annotated tag `v0.3.0`) published — `https://github.com/gitdamnit/opencode-git-that-shit/releases/tag/v0.3.0`
+- [Blocked] npm publication of `0.3.0` — not authorised, machine unauthenticated (`ENEEDAUTH`) — see Blockers
 
 ## Tests
 
@@ -67,14 +73,17 @@ In Progress
 
 ## Next Actions
 
-1. Merge PR #1 into `master` with a merge commit and pass CI.
-2. Create and push annotated tag `v0.3.0`; publish the GitHub release.
-3. Separately authorise and run the manual npm publish for `0.3.0`, then confirm
+1. Separately authorise and run the manual `Publish to npm` workflow
+   (`workflow_dispatch`) for `0.3.0`, then confirm
    `npm install @gitdamnit/opencode-git-that-shit` resolves to `0.3.0`.
+2. Remove the temporary "npm publication pending" note from the README once npm
+   `0.3.0` is live.
 
 ## Release Status
 
 **v0.3.0 — GITHUB-RELEASED / NPM-PENDING.** Verified source commit
-`6069f916a0fac14439c3335e682f994466961851`; package version `0.3.0`. GitHub
-release is the distribution of record; npm publication is an outstanding,
-separately-authorised blocker.
+`6069f916a0fac14439c3335e682f994466961851`; release commit `c752e58b9385ee57a68e89ccf059ea7766e5746c`;
+tag `v0.3.0`; release
+`https://github.com/gitdamnit/opencode-git-that-shit/releases/tag/v0.3.0`. GitHub
+release is the distribution of record; npm publication of `0.3.0` is an
+outstanding, separately-authorised blocker.
