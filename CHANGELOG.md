@@ -46,6 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Private storage permissions** — Git That Shit's own storage uses `0700` directories and `0600` files (config,
   manifest, lock, snapshot copies, prune bundles), applied without recursing into user project directories.
 - **Configurable git timeout** — `snapshot.gitTimeoutMs` bounds shadow-repository git subprocesses.
+- **Shipped licence and attribution** — the package now carries the Apache-2.0 `LICENSE` and a
+  `NOTICE` attribution file.
 
 ### Fixed
 

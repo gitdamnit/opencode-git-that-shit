@@ -1,8 +1,15 @@
 name: Publish to npm
 
+# Publication is deliberately manual. Creating or publishing a GitHub release
+# must never publish to npm automatically, so this workflow only runs when a
+# maintainer dispatches it by hand for an authorised release.
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag being published (informational only)"
+        required: false
+        type: string
 
 permissions:
   contents: read

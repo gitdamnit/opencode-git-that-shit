@@ -19,7 +19,8 @@
     "gts": "./dist/cli/index.js"
   },
   "files": [
-    "dist/"
+    "dist/",
+    "NOTICE"
   ],
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",

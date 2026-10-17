@@ -59,6 +59,13 @@ By default, Git That Shit tracks:
 npm install @gitdamnit/opencode-git-that-shit
 ```
 
+> **v0.3.0 distribution note.** `v0.3.0` is published as a GitHub release
+> ([`v0.3.0`](https://github.com/gitdamnit/opencode-git-that-shit/releases/tag/v0.3.0)).
+> npm publication of `0.3.0` is **pending**, so until it lands `npm install`
+> resolves to the latest version published on npm (`0.2.2`). To use `0.3.0`
+> immediately, install from the GitHub release source archive and run
+> `npm run build`.
+
 ## OpenCode V2 plugin setup
 
 Git That Shit targets **OpenCode 2.0.x** and depends on `@opencode/plugin` 2.0.21. Add it to `opencode.json(c)`:
