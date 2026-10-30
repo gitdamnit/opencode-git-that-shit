@@ -6,6 +6,9 @@
 
 Automatic pre-disaster snapshots for OpenCode AI coding agent config and state files.
 
+[![npm version](https://img.shields.io/npm/v/@gitdamnit/opencode-git-that-shit.svg)](https://www.npmjs.com/package/@gitdamnit/opencode-git-that-shit)
+[![license](https://img.shields.io/npm/l/@gitdamnit/opencode-git-that-shit.svg)](LICENSE)
+
 ## What is Git That Shit?
 
 Git That Shit is a safety plugin for [OpenCode](https://opencode.ai) V2 AI coding sessions. It automatically
