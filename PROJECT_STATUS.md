@@ -9,10 +9,10 @@ Released
 <!-- Machine-maintained by `prodoc update`. Do not hand-edit. -->
 <!-- prodoc:observed:start -->
 <!-- Observed from Git metadata only, by `prodoc update`. This block is not evidence that the implementation or its tests are correct; record that under `## Verification Evidence`. -->
-- **Observed branch:** detached-head
-- **Observed commit:** c752e58b9385ee57a68e89ccf059ea7766e5746c
+- **Observed branch:** master
+- **Observed commit:** 998883738cfeb4447d018ef88a8cf5753227e93a
 - **Observed working tree:** dirty
-- **Observed at:** 2026-10-17T00:37:00Z
+- **Observed at:** 2026-10-30T00:11:25Z
 <!-- prodoc:observed:end -->
 
 ## Verification Evidence
@@ -38,7 +38,7 @@ Released
 - [Implemented] Canonical project documentation — `PRODUCT_REQUIREMENTS.md`, `DECISION_LOG.md`, `PROJECT_STATUS.md`
 - [Deployed] PR #1 merged into `master` with a merge commit preserving the verified commit — `c752e58`
 - [Deployed] GitHub release `v0.3.0` (annotated tag `v0.3.0`) published — `https://github.com/gitdamnit/opencode-git-that-shit/releases/tag/v0.3.0`
-- [Blocked] npm publication of `0.3.0` — not authorised, machine unauthenticated (`ENEEDAUTH`) — see Blockers
+- [Published] npm `@gitdamnit/opencode-git-that-shit@0.3.0` — https://www.npmjs.com/package/@gitdamnit/opencode-git-that-shit
 
 ## Tests
 
@@ -51,6 +51,7 @@ Released
 | packaging | `npm pack` | Pass (70 files) | `docs/RELEASE-0.3.0-EVIDENCE.md` |
 | Docker live-host plugin lab | lab harness (external) | Pass (145) | `docs/RELEASE-0.3.0-EVIDENCE.md` |
 | fresh isolated install | `npm install <tarball>` + `gts` smoke | Pass | `docs/RELEASE-0.3.0-EVIDENCE.md` |
+| registry clean install | `npm install @gitdamnit/opencode-git-that-shit@0.3.0` in an empty project | Pass (`gts version` → 0.3.0; plugin id `gitdamnit.git-that-shit`) | https://www.npmjs.com/package/@gitdamnit/opencode-git-that-shit |
 
 ## Known Defects
 
@@ -66,24 +67,19 @@ Released
 
 ## Blockers
 
-- **npm publication of `0.3.0` is not authorised and not authenticated.**
-  npm `latest` is `0.2.2`; the release machine reports `ENEEDAUTH`. The README's
-  `npm install` command therefore resolves to `0.2.2` until this is resolved.
-  Owner: @gitdamnit. Unblocks with an authorised `npm publish` (now manual).
+- None. `0.3.0` is published to the public npm registry.
 
 ## Next Actions
 
-1. Separately authorise and run the manual `Publish to npm` workflow
-   (`workflow_dispatch`) for `0.3.0`, then confirm
-   `npm install @gitdamnit/opencode-git-that-shit` resolves to `0.3.0`.
-2. Remove the temporary "npm publication pending" note from the README once npm
-   `0.3.0` is live.
+1. None for this release. Future releases dispatch the manual `Publish to npm`
+   workflow against their release tag.
 
 ## Release Status
 
-**v0.3.0 — GITHUB-RELEASED / NPM-PENDING.** Verified source commit
+**v0.3.0 — RELEASED (GitHub + npm).** Verified source commit
 `6069f916a0fac14439c3335e682f994466961851`; release commit `c752e58b9385ee57a68e89ccf059ea7766e5746c`;
 tag `v0.3.0`; release
-`https://github.com/gitdamnit/opencode-git-that-shit/releases/tag/v0.3.0`. GitHub
-release is the distribution of record; npm publication of `0.3.0` is an
-outstanding, separately-authorised blocker.
+`https://github.com/gitdamnit/opencode-git-that-shit/releases/tag/v0.3.0`.
+npm publication succeeded through the manual OIDC workflow
+(https://github.com/gitdamnit/opencode-git-that-shit/actions/runs/40977399929)
+with a signed provenance statement; the registry serves `0.3.0` as `latest`.
